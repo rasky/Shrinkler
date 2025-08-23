@@ -52,14 +52,14 @@ void computeSuffixArray(const int *data, int *suffix_array, int length, int alph
 		return;
 	}
 
-	// Ottimizzazione: Alloca tutti gli array in una volta sola per ridurre le chiamate a malloc
+	// Optimization: Allocate all arrays at once to reduce malloc calls
 	int total_size = length + (alphabet_size + 1) + alphabet_size;
 	int *all_arrays = malloc(total_size * sizeof(int));
 	if (!all_arrays) {
 		return;
 	}
 	
-	// Assegna i puntatori agli array
+	// Assign pointers to arrays
 	int *stype = all_arrays;
 	int *buckets = stype + length;
 	int *bucket_index = buckets + (alphabet_size + 1);
@@ -182,6 +182,6 @@ void computeSuffixArray(const int *data, int *suffix_array, int length, int alph
 	// Induce from sorted LMS strings to sort all suffixes
 	induce(data, suffix_array, length, alphabet_size, stype, buckets, bucket_index);
 
-	// Cleanup - ora libera solo un array
+	// Cleanup - now free only one array
 	free(all_arrays);
 }

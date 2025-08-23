@@ -26,7 +26,7 @@ static int init_sizetable() {
 	return 1;
 }
 
-// Ottimizzazione: Pre-allocazione del buffer e riduzione delle riallocazioni
+// Optimization: Buffer pre-allocation and reduction of reallocations
 static void add_bit(RangeCoder *coder) {
 	int pos = coder->dest_bit;
 	int bytepos;
@@ -38,17 +38,17 @@ static void add_bit(RangeCoder *coder) {
 		bytepos = pos >> 3;
 		bitmask = 0x80 >> (pos & 7);
 		
-		// Controlla se serve espandere il buffer
-		if (bytepos >= *coder->out_size) {
-			int new_size = bytepos + 1024; // Buffer extra per evitare riallocazioni multiple
-			unsigned char *new_out = realloc(*coder->out, new_size * sizeof(unsigned char));
-			if (new_out) {
-				*coder->out = new_out;
-				// Inizializza solo i nuovi byte a 0
-				memset(&(*coder->out)[*coder->out_size], 0, (new_size - *coder->out_size) * sizeof(unsigned char));
-				*coder->out_size = new_size;
-			} else {
-				// Fallback: riallocazione normale se la pre-espansione fallisce
+		                    // Check if buffer expansion is needed
+                    if (bytepos >= *coder->out_size) {
+                        int new_size = bytepos + 1024; // Extra buffer to avoid multiple reallocations
+                        unsigned char *new_out = realloc(*coder->out, new_size * sizeof(unsigned char));
+                        if (new_out) {
+                            *coder->out = new_out;
+                            // Initialize only the new bytes to 0
+                            memset(&(*coder->out)[*coder->out_size], 0, (new_size - *coder->out_size) * sizeof(unsigned char));
+                            *coder->out_size = new_size;
+                        } else {
+                            // Fallback: normal reallocation if pre-expansion fails
 				int fallback_size = bytepos + 1;
 				*coder->out = realloc(*coder->out, fallback_size * sizeof(unsigned char));
 				if (*coder->out) {
@@ -145,7 +145,7 @@ int rangecoder_code(RangeCoder *coder, int context_index, int bit) {
 	assert(new_prob < 0x10000);
 	coder->contexts[context_index] = new_prob;
 	
-	// Ottimizzazione: Gestione più efficiente del carry
+	                // Optimization: More efficient carry handling
 	unsigned carry_bits = 0;
 	while (coder->intervalsize < 0x8000) {
 		coder->dest_bit++;

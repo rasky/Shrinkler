@@ -89,10 +89,10 @@ CuckooHash* cuckoohash_new(int capacity) {
     CuckooHash *hash = malloc(sizeof(CuckooHash));
     if (!hash) return NULL;
     
-    // Ottimizzazione: Inizializza con una dimensione più grande per ridurre le riallocazioni
+    // Optimization: Initialize with a larger size to reduce reallocations
     int initial_size_log = INITIAL_SIZE_LOG;
     if (capacity > 0) {
-        // Calcola una dimensione iniziale più appropriata basata sulla capacità richiesta
+        // Calculate a more appropriate initial size based on the requested capacity
         while ((1 << initial_size_log) < capacity * 2) {
             initial_size_log++;
         }

@@ -1,2 +1,8 @@
 build
 toolchain/*
+
+# Binaries
+decruncher_c/shrinkler_dec
+minichruncher_c/minishrinkler
+cruncher_c/Shrinkler
+cruncher_c/CShrinkler

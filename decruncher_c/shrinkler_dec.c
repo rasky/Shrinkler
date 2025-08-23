@@ -24,6 +24,9 @@
 #define read32be(ptr) __builtin_bswap32(*(uint32_t*)(ptr))
 /// @endcond
 
+// Global trace flag
+static bool g_trace = false;
+
 #define ADJUST_SHIFT 4             ///< Shift amount for context probability adjustment
 
 #define NUM_SINGLE_CONTEXTS 1      ///< Number of single contexts
@@ -71,11 +74,19 @@ static void shr_decode_init(shrinkler_ctx_t *ctx, uint8_t *src) {
 }
 
 static inline int shr_decode_bit(shrinkler_ctx_t *ctx, int context_index) {
+    if (g_trace) {
+        fprintf(stderr, "      SHR_DECODE_BIT: context=%d intervalsize=0x%04x intervalvalue=0x%016llx bits_left=%d\n", 
+               context_index, ctx->intervalsize, ctx->intervalvalue, ctx->bits_left);
+    }
+    
     while ((ctx->intervalsize < 0x8000)) {
         if (unlikely(ctx->bits_left == 0)) {
             ctx->intervalvalue |= read32be(ctx->src);
             ctx->src += 4;
             ctx->bits_left = 32;
+            if (g_trace) {
+                fprintf(stderr, "      RENORM: read32be, bits_left=32\n");
+            }
         }
         ctx->bits_left -= 1;
         ctx->intervalsize <<= 1;
@@ -86,16 +97,29 @@ static inline int shr_decode_bit(shrinkler_ctx_t *ctx, int context_index) {
     unsigned intervalvalue = ctx->intervalvalue >> 48;
     unsigned threshold = (ctx->intervalsize * prob) >> 16;
 
+    if (g_trace) {
+        fprintf(stderr, "      DECODE: prob=0x%04x intervalvalue=0x%04x threshold=0x%04x\n", 
+               prob, intervalvalue, threshold);
+    }
+
     if (intervalvalue >= threshold) {
         // Zero
         ctx->intervalvalue -= (uint64_t)threshold << 48;
         ctx->intervalsize -= threshold;
         ctx->contexts[context_index] = prob - (prob >> ADJUST_SHIFT);
+        if (g_trace) {
+            fprintf(stderr, "      DECODE_ZERO: intervalvalue(0x%04x) >= threshold(0x%04x) -> bit=0\n", 
+                   intervalvalue, threshold);
+        }
         return 0;
     } else {
         // One
         ctx->intervalsize = threshold;
         ctx->contexts[context_index] = prob + (0xffff >> ADJUST_SHIFT) - (prob >> ADJUST_SHIFT);
+        if (g_trace) {
+            fprintf(stderr, "      DECODE_ONE: intervalvalue(0x%04x) < threshold(0x%04x) -> bit=1\n", 
+                   intervalvalue, threshold);
+        }
         return 1;
     }
 }
@@ -103,16 +127,45 @@ static inline int shr_decode_bit(shrinkler_ctx_t *ctx, int context_index) {
 static inline int shr_decode_number(shrinkler_ctx_t *ctx, int base_context) {
     int context;
     int i;
+    
+    if (g_trace) {
+        fprintf(stderr, "    SHR_DECODE_NUMBER: base_context=%d\n", base_context);
+    }
+    
+    // First loop: find number of bits
     for (i = 0 ;; i++) {
         context = base_context + (i * 2 + 2);
-        if (shr_decode_bit(ctx, context) == 0) break;
+        int continue_bit = shr_decode_bit(ctx, context);
+        if (g_trace) {
+            fprintf(stderr, "    CONTINUE_BIT: i=%d context=%d bit=%d (4<<i=%d)\n", 
+                   i, context, continue_bit, (4 << i));
+        }
+        if (continue_bit == 0) break;
     }
 
+    if (g_trace) {
+        fprintf(stderr, "    STOP_BIT: i=%d (will decode %d bits)\n", i, i+1);
+    }
+
+    // Second loop: decode the actual number
     int number = 1;
+    if (g_trace) {
+        fprintf(stderr, "    NUMBER_START: number=1\n");
+    }
+    
     for (; i >= 0 ; i--) {
         context = base_context + (i * 2 + 1);
         int bit = shr_decode_bit(ctx, context);
+        int old_number = number;
         number = (number << 1) | bit;
+        if (g_trace) {
+            fprintf(stderr, "    NUMBER_BIT: i=%d context=%d bit=%d old_number=%d new_number=%d (%d<<1|%d)\n", 
+                   i, context, bit, old_number, number, old_number, bit);
+        }
+    }
+
+    if (g_trace) {
+        fprintf(stderr, "    SHR_DECODE_NUMBER: RESULT=%d\n", number);
     }
 
     return number;
@@ -138,19 +191,42 @@ static int shr_unpack(uint8_t *dst, uint8_t *src)
     bool prev_was_ref = false;
     int offset = 0;
 
+    if (g_trace) {
+        fprintf(stderr, "=== SHRINKLER DECOMPRESSOR TRACE ===\n");
+    }
+
     while (1) {
         if (ref) {
             bool repeated = false;
             if (!prev_was_ref) {
                 repeated = lzDecode(&ctx, CONTEXT_REPEATED);
+                if (g_trace) {
+                    fprintf(stderr, "POS %ld: DECODE_REPEATED = %s\n", dst - dst_start, repeated ? "true" : "false");
+                }
             }
             if (!repeated) {
-                offset = lzDecodeNumber(&ctx, CONTEXT_GROUP_OFFSET) - 2;
-                if (offset == 0)
+                int encoded_offset = lzDecodeNumber(&ctx, CONTEXT_GROUP_OFFSET);
+                offset = encoded_offset - 2;
+                if (g_trace) {
+                    fprintf(stderr, "POS %ld: DECODE_OFFSET encoded=%d offset=%d\n", dst - dst_start, encoded_offset, offset);
+                }
+                if (offset == 0) {
+                    if (g_trace) {
+                        fprintf(stderr, "POS %ld: END_MARKER detected\n", dst - dst_start);
+                    }
                     break;
+                }
             }
             int length = lzDecodeNumber(&ctx, CONTEXT_GROUP_LENGTH);
+            if (g_trace) {
+                fprintf(stderr, "POS %ld: DECODE_LENGTH = %d\n", dst - dst_start, length);
+                fprintf(stderr, "POS %ld: MATCH offset=%d length=%d (copy from pos %ld)\n", 
+                       dst - dst_start, offset, length, (dst - dst_start) - offset);
+            }
             prev_was_ref = true;
+            
+            // Copy data
+            int orig_length = length;
             if (offset > 8) 
                 while (length >= 8) {
                     memcpy(dst, dst - offset, 8);
@@ -161,6 +237,11 @@ static int shr_unpack(uint8_t *dst, uint8_t *src)
                 *dst = dst[-offset];
                 dst++;
             }
+            
+            if (g_trace) {
+                fprintf(stderr, "POS %ld: MATCH_COMPLETE copied %d bytes to pos %ld\n", 
+                       dst - dst_start, orig_length, (dst - dst_start) - orig_length);
+            }
         } else {
             int parity = (dst - dst_start) & parity_mask;
             int context = 1;
@@ -169,11 +250,19 @@ static int shr_unpack(uint8_t *dst, uint8_t *src)
                 context = (context << 1) | bit;
             }
             uint8_t lit = context;
+            if (g_trace) {
+                fprintf(stderr, "POS %ld: LITERAL 0x%02x (%c) parity=%d\n", 
+                       dst - dst_start, lit, (lit >= 32 && lit <= 126) ? lit : '.', parity);
+            }
             *dst++ = lit;
             prev_was_ref = false;
         }
         int parity = (dst - dst_start) & parity_mask;
         ref = lzDecode(&ctx, CONTEXT_KIND + (parity << 8));
+        if (g_trace) {
+            fprintf(stderr, "POS %ld: DECODE_KIND = %s (parity=%d, context=%d)\n", 
+                   dst - dst_start, ref ? "REF" : "LIT", parity, CONTEXT_KIND + (parity << 8));
+        }
     }
     
     return dst - dst_start;
@@ -263,6 +352,7 @@ void print_usage(const char *progname) {
     printf("\nOptions:\n");
     printf("  -h, --help     Show this help message\n");
     printf("  -v, --verbose  Verbose output\n");
+    printf("  --trace        Enable decompression trace\n");
     printf("\nIf output_file is not specified, output goes to stdout\n");
     printf("\nExample:\n");
     printf("  %s compressed.shr decompressed.bin\n", progname);
@@ -281,6 +371,8 @@ int main(int argc, char *argv[]) {
             return 0;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             verbose = true;
+        } else if (strcmp(argv[i], "--trace") == 0) {
+            g_trace = true;
         } else if (!input_file) {
             input_file = argv[i];
         } else if (!output_file) {

@@ -58,6 +58,7 @@ TOTAL_ORIGINAL_SIZE=0
 TOTAL_C_COMPRESSED_SIZE=0
 TOTAL_CPP_COMPRESSED_SIZE=0
 TOTAL_MINI_COMPRESSED_SIZE=0
+TOTAL_GZIP_COMPRESSED_SIZE=0
 
 # Function to clean temporary files
 cleanup() {
@@ -82,13 +83,15 @@ exit_handler() {
         local total_c_ratio=$(echo "scale=2; $TOTAL_C_COMPRESSED_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
         local total_cpp_ratio=$(echo "scale=2; $TOTAL_CPP_COMPRESSED_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
         local total_mini_ratio=$(echo "scale=2; $TOTAL_MINI_COMPRESSED_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+        local total_gzip_ratio=$(echo "scale=2; $TOTAL_GZIP_COMPRESSED_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
         
         log_info "Total compression ratios (${TOTAL_ORIGINAL_SIZE} bytes total):"
         log_info "  CShrinkler: ${TOTAL_C_COMPRESSED_SIZE} bytes (${total_c_ratio}%)"
         log_info "  Shrinkler:  ${TOTAL_CPP_COMPRESSED_SIZE} bytes (${total_cpp_ratio}%)"
         log_mini "  Minishrinkler: ${TOTAL_MINI_COMPRESSED_SIZE} bytes (${total_mini_ratio}%)"
+        log_info "  Gzip -9:    ${TOTAL_GZIP_COMPRESSED_SIZE} bytes (${total_gzip_ratio}%)"
         
-        if [ "$total_c_ratio" != "N/A" ] && [ "$total_cpp_ratio" != "N/A" ] && [ "$total_mini_ratio" != "N/A" ]; then
+        if [ "$total_c_ratio" != "N/A" ] && [ "$total_cpp_ratio" != "N/A" ] && [ "$total_mini_ratio" != "N/A" ] && [ "$total_gzip_ratio" != "N/A" ]; then
             echo
             log_info "Performance comparison:"
             if (( $(echo "$total_mini_ratio < $total_cpp_ratio" | bc -l) )); then
@@ -101,6 +104,12 @@ exit_handler() {
                 log_success "✓ Minishrinkler beats CShrinkler by $(echo "scale=2; $total_c_ratio - $total_mini_ratio" | bc -l)%"
             else
                 log_warning "⚠ Minishrinkler is $(echo "scale=2; $total_mini_ratio - $total_c_ratio" | bc -l)% worse than CShrinkler"
+            fi
+            
+            if (( $(echo "$total_mini_ratio < $total_gzip_ratio" | bc -l) )); then
+                log_success "✓ Minishrinkler beats Gzip by $(echo "scale=2; $total_gzip_ratio - $total_mini_ratio" | bc -l)%"
+            else
+                log_warning "⚠ Minishrinkler is $(echo "scale=2; $total_mini_ratio - $total_gzip_ratio" | bc -l)% worse than Gzip"
             fi
         fi
     fi
@@ -243,6 +252,15 @@ test_file() {
     local mini_size=$(wc -c < "$mini_output")
     local mini_ratio=$(calculate_ratio "$original_size" "$mini_size")
     
+    # Compress with Gzip -9
+    local gzip_output="$OUTPUT_DIR/${filename}.gz"
+    if ! gzip -9 -c "$input_file" > "$gzip_output" 2>/dev/null; then
+        log_error "Gzip compression failed for: $filename"
+        return 1
+    fi
+    local gzip_size=$(wc -c < "$gzip_output")
+    local gzip_ratio=$(calculate_ratio "$original_size" "$gzip_size")
+    
     # Test decompression for all three versions
     local decompression_ok=true
     
@@ -286,12 +304,14 @@ test_file() {
     log_info "  Shrinkler:     ${cpp_size} bytes (${cpp_ratio}%)"
     log_info "  CShrinkler:    ${c_size} bytes (${c_ratio}%)"
     log_mini "  Minishrinkler: ${mini_size} bytes (${mini_ratio}%)"
+    log_info "  Gzip -9:       ${gzip_size} bytes (${gzip_ratio}%)"
     
     # Update statistics
     TOTAL_ORIGINAL_SIZE=$((TOTAL_ORIGINAL_SIZE + original_size))
     TOTAL_C_COMPRESSED_SIZE=$((TOTAL_C_COMPRESSED_SIZE + c_size))
     TOTAL_CPP_COMPRESSED_SIZE=$((TOTAL_CPP_COMPRESSED_SIZE + cpp_size))
     TOTAL_MINI_COMPRESSED_SIZE=$((TOTAL_MINI_COMPRESSED_SIZE + mini_size))
+    TOTAL_GZIP_COMPRESSED_SIZE=$((TOTAL_GZIP_COMPRESSED_SIZE + gzip_size))
     
     return 0
 }

@@ -45,8 +45,7 @@
 #define CONTEXT_GROUP_OFFSET 2
 #define CONTEXT_GROUP_LENGTH 3
 
-#define HASH_SIZE 1024
-#define HASH_MASK (HASH_SIZE - 1)
+#define HASH_SIZE 768
 
 // Data structures - Embedded optimized
 typedef struct {
@@ -69,6 +68,8 @@ typedef struct {
 typedef struct {
     uint16_t pos; 
     uint16_t next;
+    uint8_t match_len;  // Cache for match length to improve early exit
+    uint8_t quality;    // Match quality indicator (0-255)
 } shr_hash_entry_t;
 
 // Embedded memory optimization: no static allocations
@@ -94,9 +95,10 @@ static void init_size_table(shr_work_buffer_t *mem) {
     mem->size_table_init = 1;
 }
 
-// Hash function for 3-byte sequences
+// Improved hash function for 3-byte sequences
 static unsigned int hash3(const unsigned char *data) {
-    return ((data[0] << 16) | (data[1] << 8) | data[2]) & HASH_MASK;
+    // Better distribution than simple bit shifting
+    return ((data[0] * 31 + data[1]) * 31 + data[2]) % HASH_SIZE;
 }
 
 // Initialize hash table
@@ -104,13 +106,30 @@ static void init_hash_table(shr_work_buffer_t *mem) {
     memset(mem->hash_table, 0, sizeof(mem->hash_table));
 }
 
-// Update hash table with new position
+// Update hash table with new position and cache match information
 static void update_hash(shr_work_buffer_t *mem, const unsigned char *data, int pos, int data_size) {
     if (pos + 2 >= data_size) return;
     
     unsigned int hash = hash3(&data[pos]);
+    
+    // Calculate match quality based on data characteristics
+    uint8_t quality = 0;
+    if (pos + 3 < data_size) {
+        // Better quality heuristic: focus on compressible patterns
+        if (data[pos] == data[pos + 1] && data[pos + 1] == data[pos + 2]) {
+            quality = 255; // Excellent quality for repeated data (RLE)
+        } else if (data[pos] != data[pos + 1] && data[pos + 1] != data[pos + 2] && data[pos] != data[pos + 2]) {
+            quality = 64;  // Lower quality for varied data (harder to compress)
+        } else {
+            quality = 128; // Medium quality for mixed patterns
+        }
+    }
+    
+    // Update hash table with new entry
     mem->hash_table[hash].next = mem->hash_table[hash].pos;
     mem->hash_table[hash].pos = pos;
+    mem->hash_table[hash].quality = quality;
+    mem->hash_table[hash].match_len = 0; // Will be calculated during match finding
 }
 
 // Exact copy of original RangeCoder logic (adapted for static allocation)
@@ -424,7 +443,7 @@ static int encode_reference(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int
     return size;
 }
 
-// Improved Match Finder using hash table
+// Intelligent Match Finder using enhanced hash table
 static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int data_size, int pos, 
                      int *best_offset, int *best_length) {
     *best_length = 0;
@@ -439,15 +458,27 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
     unsigned int hash = hash3(&data[pos]);
     int candidate_pos = mem->hash_table[hash].pos;
     int matches_checked = 0;
-    const int max_matches = 32; // Limit number of candidates to check
+    
+    // Adaptive max_matches based on data size and position
+    int max_matches = (data_size < 1024) ? 24 : 64; // More candidates for better compression
+    
+    // Track best quality match for early exit optimization
+    int best_quality = 0;
     
     while (candidate_pos > 0 && matches_checked < max_matches) {
         int offset = pos - candidate_pos;
         
         if (offset > max_offset) break;
         
-        // Check if we have a match
+        // Use cached match length if available and recent
         int match_len = 0;
+        if (mem->hash_table[hash].match_len > 0 && 
+            candidate_pos == mem->hash_table[hash].pos) {
+            // Use cached length as starting point
+            match_len = mem->hash_table[hash].match_len;
+        }
+        
+        // Check if we have a match
         while (match_len < max_len && 
                pos + match_len < data_size && 
                candidate_pos + match_len < data_size &&
@@ -455,13 +486,31 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
             match_len++;
         }
         
+        // Update cached match length
+        if (candidate_pos == mem->hash_table[hash].pos) {
+            mem->hash_table[hash].match_len = match_len;
+        }
+        
+        // Calculate match quality score
+        int quality = mem->hash_table[hash].quality;
+        if (match_len >= 8) quality += 128;  // Higher bonus for longer matches
+        if (match_len >= 16) quality += 64;  // Extra bonus for very long matches
+        if (offset <= 256) quality += 64;    // Higher bonus for closer matches
+        if (offset <= 64) quality += 32;     // Extra bonus for very close matches
+        
         // Update if we found a better match (exclude offset 0)
-        if (match_len >= MIN_MATCH_LENGTH && match_len > *best_length && offset > 0) {
-            *best_length = match_len;
-            *best_offset = offset;
-            
-            // Early exit for very good matches
-            if (match_len >= 16) break;
+        if (match_len >= MIN_MATCH_LENGTH && offset > 0) {
+            // Prefer longer matches, then higher quality, then closer offsets
+            if (match_len > *best_length || 
+                (match_len == *best_length && quality > best_quality) ||
+                (match_len == *best_length && quality == best_quality && offset < *best_offset)) {
+                *best_length = match_len;
+                *best_offset = offset;
+                best_quality = quality;
+                
+                // Early exit for excellent matches
+                if (match_len >= 16 && quality >= 200) break;
+            }
         }
         
         candidate_pos = mem->hash_table[hash].next;
@@ -504,7 +553,7 @@ static int compress_data(const unsigned char *input, int input_size,
     if (input_size > 32) tracef("...");
     tracef("\n\n");
     
-    // Compression
+    // Compression with lazy matching
     while (pos < input_size) {
         // Update hash table
         update_hash(mem, input, pos, input_size);
@@ -512,6 +561,29 @@ static int compress_data(const unsigned char *input, int input_size,
         int best_offset, best_length;
         
         if (find_match(mem, input, input_size, pos, &best_offset, &best_length)) {
+            // Lazy matching: look ahead for better matches
+            if (best_length >= 4 && pos + 1 < input_size) {
+                int next_offset, next_length;
+                
+                // Update hash for next position
+                update_hash(mem, input, pos + 1, input_size);
+                
+                if (find_match(mem, input, input_size, pos + 1, &next_offset, &next_length)) {
+                    // Compare current match vs next position match
+                    int current_cost = 2 + (best_length >= 8 ? 1 : 0) + (best_offset >= 256 ? 1 : 0);
+                    int next_cost = 2 + (next_length >= 8 ? 1 : 0) + (next_offset >= 256 ? 1 : 0);
+                    
+                    // If next match is significantly better, encode literal and continue
+                    if (next_length > best_length + 1 || 
+                        (next_length == best_length + 1 && next_cost <= current_cost)) {
+                        tracef("POS %d: LAZY LITERAL 0x%02x (waiting for better match)\n", pos, input[pos]);
+                        encode_literal(&coder, mem, input[pos], &state);
+                        pos++;
+                        continue;
+                    }
+                }
+            }
+            
             // Encode reference
             tracef("POS %d: MATCH offset=%d length=%d\n", pos, best_offset, best_length);
             encode_reference(&coder, mem, best_offset, best_length, &state);

@@ -116,7 +116,7 @@ void packData(unsigned char *data, int data_length, int zero_padding, PackParams
 		}
 		
 		// Print size
-		printf("%14.3f", real_size / (double)(8 << 8)); // BIT_PRECISION = 8
+		printf("%14.3f", real_size / (double)(8 << BIT_PRECISION));
 		
 		// Count symbol frequencies for next iteration
 		CountingCoder *new_counting_coder = countingcoder_new(NUM_CONTEXTS);

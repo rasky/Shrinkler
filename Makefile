@@ -113,8 +113,8 @@ $(BUILD_DIR_C)/CShrinkler: $(BUILD_DIR_C)/Shrinkler.o $(BUILD_DIR_C)/DataFile.o 
 	$(LINK_C) $(LFLAGS) $^ -o $@
 
 # Minishrinkler
-$(BUILD_DIR_MINI)/minishrinkler: $(BUILD_DIR_MINI)/minishrinkler.c
-	$(CC_C) -Wall -Wextra -O2 -std=c99 -o $@ $< -lm
+$(BUILD_DIR_MINI)/minishrinkler: $(BUILD_DIR_MINI)/minishrinkler_api.c $(BUILD_DIR_MINI)/minishrinkler.c $(BUILD_DIR_MINI)/minishrinkler.h
+	$(CC_C) -Wall -Wextra -O2 -std=c99 -o $@ $(BUILD_DIR_MINI)/minishrinkler_api.c $(BUILD_DIR_MINI)/minishrinkler.c -lm
 
 # Decompressor
 $(BUILD_DIR_DEC)/shrinkler_dec: $(BUILD_DIR_DEC)/shrinkler_dec.c

@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # Test script to verify compatibility between C, C++ and Mini versions of the Shrinkler compressor
-# Author: AI Assistant
-# Date: $(date)
+# Author: Giovanni Bajo <giovannibajo@gmail.com>
 
 set -e  # Exit on any error
 

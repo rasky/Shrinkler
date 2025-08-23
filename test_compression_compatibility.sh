@@ -132,12 +132,7 @@ compile_versions() {
         exit 1
     fi
     
-    # Compile minishrinkler
-    log_info "Compiling minishrinkler..."
-    if ! (cd "$MINI_DIR" && make clean && make); then
-        log_error "Minishrinkler compilation failed"
-        exit 1
-    fi
+    # Minishrinkler is already compiled by the main Makefile with 'make all'
     
     # Verify that executables exist
     if [ ! -f "$BUILD_DIR_CPP/$CPP_EXECUTABLE" ]; then

@@ -91,13 +91,6 @@ int minishrinkler_compress(
  */
 size_t minishrinkler_get_max_compressed_size(size_t input_size);
 
-/**
- * @brief Get version information
- * 
- * @return Pointer to a null-terminated string containing version info
- */
-const char* minishrinkler_get_version(void);
-
 #ifdef __cplusplus
 }
 #endif

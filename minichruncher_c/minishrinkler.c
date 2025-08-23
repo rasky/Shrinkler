@@ -22,10 +22,9 @@
  */
 static void print_usage(const char *program_name) {
     printf("Usage: %s <input_file> <output_file>\n", program_name);
-    printf("MiniShrinkler - Improved version of the Shrinkler compressor\n");
+    printf("MiniShrinkler - Embedded-friendly version of the Shrinkler compressor\n");
     printf("Outputs raw compressed data without header (compatible with -d option)\n");
     printf("\n");
-    printf("Version: %s\n", minishrinkler_get_version());
 }
 
 /**

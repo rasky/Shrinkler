@@ -26,40 +26,22 @@ static int init_sizetable() {
 	return 1;
 }
 
-// Optimization: Buffer pre-allocation and reduction of reallocations
 static void add_bit(RangeCoder *coder) {
 	int pos = coder->dest_bit;
 	int bytepos;
 	int bitmask;
-	
 	do {
 		pos--;
 		if (pos < 0) return;
 		bytepos = pos >> 3;
 		bitmask = 0x80 >> (pos & 7);
 		
-		                    // Check if buffer expansion is needed
-                    if (bytepos >= *coder->out_size) {
-                        int new_size = bytepos + 1024; // Extra buffer to avoid multiple reallocations
-                        unsigned char *new_out = realloc(*coder->out, new_size * sizeof(unsigned char));
-                        if (new_out) {
-                            *coder->out = new_out;
-                            // Initialize only the new bytes to 0
-                            memset(&(*coder->out)[*coder->out_size], 0, (new_size - *coder->out_size) * sizeof(unsigned char));
-                            *coder->out_size = new_size;
-                        } else {
-                            // Fallback: normal reallocation if pre-expansion fails
-				int fallback_size = bytepos + 1;
-				*coder->out = realloc(*coder->out, fallback_size * sizeof(unsigned char));
-				if (*coder->out) {
-					(*coder->out)[*coder->out_size] = 0;
-					*coder->out_size = fallback_size;
-				}
-			}
+		while (bytepos >= *coder->out_size) {
+			*coder->out = realloc(*coder->out, (*coder->out_size + 1) * sizeof(unsigned char));
+			(*coder->out)[*coder->out_size] = 0;
+			(*coder->out_size)++;
 		}
-		
 		(*coder->out)[bytepos] ^= bitmask;
-		
 	} while (((*coder->out)[bytepos] & bitmask) == 0);
 }
 
@@ -115,7 +97,14 @@ int rangecoder_code(RangeCoder *coder, int context_index, int bit) {
 	assert(context_index < 1024); // Assuming max contexts
 	assert(bit == 0 || bit == 1);
 	
-	int size_before = (coder->dest_bit << BIT_PRECISION) + sizetable[(coder->intervalsize - 0x8000) >> 8];
+	// Calculate size_before, handling the case where dest_bit is -1 (initial state)
+	int size_before;
+	if (coder->dest_bit < 0) {
+		// Initial state: dest_bit is -1, so size is just the sizetable entry
+		size_before = sizetable[(coder->intervalsize - 0x8000) >> 8];
+	} else {
+		size_before = (coder->dest_bit << BIT_PRECISION) + sizetable[(coder->intervalsize - 0x8000) >> 8];
+	}
 	
 	// Add bounds checking and tracing
 	if (context_index < 0 || context_index >= 1024) {
@@ -133,6 +122,9 @@ int rangecoder_code(RangeCoder *coder, int context_index, int bit) {
 	if (!bit) {
 		// Zero
 		coder->intervalmin += threshold;
+		if (coder->intervalmin & 0x10000) {
+			add_bit(coder);
+		}
 		coder->intervalsize = coder->intervalsize - threshold;
 		new_prob = prob - (prob >> 4); // ADJUST_SHIFT = 4
 	} else {
@@ -145,21 +137,24 @@ int rangecoder_code(RangeCoder *coder, int context_index, int bit) {
 	assert(new_prob < 0x10000);
 	coder->contexts[context_index] = new_prob;
 	
-	                // Optimization: More efficient carry handling
-	unsigned carry_bits = 0;
 	while (coder->intervalsize < 0x8000) {
 		coder->dest_bit++;
 		coder->intervalsize <<= 1;
 		coder->intervalmin <<= 1;
-		carry_bits = (coder->intervalmin >> 16) & 1;
-		coder->intervalmin &= 0xffff;
-		
-		if (carry_bits) {
+		if (coder->intervalmin & 0x10000) {
 			add_bit(coder);
 		}
 	}
+	coder->intervalmin &= 0xffff;
 	
-	int size_after = (coder->dest_bit << BIT_PRECISION) + sizetable[(coder->intervalsize - 0x8000) >> 8];
+	// Calculate size_after, handling the case where dest_bit is -1 (initial state)
+	int size_after;
+	if (coder->dest_bit < 0) {
+		// Initial state: dest_bit is -1, so size is just the sizetable entry
+		size_after = sizetable[(coder->intervalsize - 0x8000) >> 8];
+	} else {
+		size_after = (coder->dest_bit << BIT_PRECISION) + sizetable[(coder->intervalsize - 0x8000) >> 8];
+	}
 	int size_diff = size_after - size_before;
 	
 	// Trace the output state
@@ -214,6 +209,9 @@ void rangecoder_finish(RangeCoder *coder) {
 		for (int i = *coder->out_size; i < required_bytes; i++) {
 			(*coder->out)[i] = 0;
 		}
+		*coder->out_size = required_bytes;
+	} else {
+		// Update the output size to the actual data size
 		*coder->out_size = required_bytes;
 	}
 	

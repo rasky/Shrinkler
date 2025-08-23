@@ -73,15 +73,9 @@ trap exit_handler EXIT INT TERM
 
 # Function to compile versions
 compile_versions() {
-    log_info "Compiling C++ version..."
-    if ! make; then
-        log_error "C++ version compilation failed"
-        exit 1
-    fi
-    
-    log_info "Compiling C version..."
-    if ! make -f Makefile_c; then
-        log_error "C version compilation failed"
+    log_info "Compiling all versions..."
+    if ! make all; then
+        log_error "Compilation failed"
         exit 1
     fi
     
@@ -93,6 +87,11 @@ compile_versions() {
     
     if [ ! -f "$BUILD_DIR_C/$C_EXECUTABLE" ]; then
         log_error "C executable not found: $BUILD_DIR_C/$C_EXECUTABLE"
+        exit 1
+    fi
+    
+    if [ ! -f "decruncher_c/shrinkler_dec" ]; then
+        log_error "Decompressor executable not found: decruncher_c/shrinkler_dec"
         exit 1
     fi
     
@@ -316,6 +315,31 @@ EOF
     log_success "Testsuite created successfully ($(ls "$TEST_DIR" | wc -l) files)"
 }
 
+# Function to test decompression
+test_decompression() {
+    local compressed_file="$1"
+    local original_file="$2"
+    local filename=$(basename "$original_file")
+    
+    # Decompress using our decompressor
+    local decompressed_output="$OUTPUT_DIR/${filename}.decompressed"
+    if ! "./decruncher_c/shrinkler_dec" "$compressed_file" > "$decompressed_output" 2>/dev/null; then
+        log_error "Decompression failed for: $filename"
+        return 1
+    fi
+    
+    # Compare with original
+    if cmp -s "$original_file" "$decompressed_output"; then
+        log_success "✓ $filename: Decompression successful (matches original)"
+        return 0
+    else
+        log_error "✗ $filename: Decompression failed (doesn't match original)"
+        log_info "  Original size: $(wc -c < "$original_file") bytes"
+        log_info "  Decompressed size: $(wc -c < "$decompressed_output") bytes"
+        return 1
+    fi
+}
+
 # Function to test a single file
 test_file() {
     local input_file="$1"
@@ -343,7 +367,13 @@ test_file() {
     # Compare compressed files
     if cmp -s "$cpp_output" "$c_output"; then
         log_success "✓ $filename: Compressed files are identical"
-        return 0
+        
+        # Test decompression with the C++ compressed file
+        if test_decompression "$cpp_output" "$input_file"; then
+            return 0
+        else
+            return 1
+        fi
     else
         log_error "✗ $filename: Compressed files are different!"
         log_info "  C++ size: $(wc -c < "$cpp_output") bytes"
@@ -355,7 +385,7 @@ test_file() {
 # Main function
 main() {
     log_info "=== Shrinkler Compressor Compatibility Test ==="
-    log_info "C version vs C++ version"
+    log_info "C version vs C++ version + Decompression verification"
     echo
     
     # Compile versions

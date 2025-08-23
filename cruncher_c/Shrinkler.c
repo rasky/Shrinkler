@@ -388,7 +388,7 @@ int main2(int argc, const char *argv[]) {
 		printf("Error: Failed to create edge factory\n");
 		return 1;
 	}
-		DataFile *crunched = datafile_crunch(orig, &params, edge_factory, !no_progress.seen);
+		DataFile *crunched = datafile_crunch(orig, &params, edge_factory, !no_progress.seen, trace.seen);
 		datafile_free(orig);
 		printf("References considered:%8d\n",  edge_factory->max_edge_count);
 		printf("References discarded:%9d\n\n", edge_factory->max_cleaned_edges);
@@ -477,7 +477,7 @@ int main2(int argc, const char *argv[]) {
 		printf("Error: Failed to create edge factory\n");
 		return 1;
 	}
-	HunkFile *crunched = hunkfile_crunch(orig, &params, overlap.seen, mini.seen, commandline.seen, decrunch_text, flash.value, edge_factory, !no_progress.seen);
+	HunkFile *crunched = hunkfile_crunch(orig, &params, overlap.seen, mini.seen, commandline.seen, decrunch_text, flash.value, edge_factory, !no_progress.seen, trace.seen);
 	hunkfile_free(orig);
 			printf("References considered:%8d\n",  edge_factory->max_edge_count);
 		printf("References discarded:%9d\n\n", edge_factory->max_cleaned_edges);

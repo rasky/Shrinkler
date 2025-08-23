@@ -55,4 +55,4 @@ int hunkfile_valid_mini(HunkFile *file);
 void* hunkfile_identity_hunklist(HunkFile *file);
 void* hunkfile_merged_hunklist(HunkFile *file);
 HunkFile* hunkfile_merge_hunks(HunkFile *file, void *hunklist);
-HunkFile* hunkfile_crunch(HunkFile *file, PackParams *params, int overlap, int mini, int commandline, char *decrunch_text, unsigned flash_address, RefEdgeFactory *edge_factory, int show_progress);
+HunkFile* hunkfile_crunch(HunkFile *file, PackParams *params, int overlap, int mini, int commandline, char *decrunch_text, unsigned flash_address, RefEdgeFactory *edge_factory, int show_progress, int enable_trace);

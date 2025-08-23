@@ -43,4 +43,4 @@ void datafile_free(DataFile *file);
 void datafile_load(DataFile *file, const char *filename);
 void datafile_save(DataFile *file, const char *filename, int write_header);
 int datafile_size(DataFile *file, int include_header);
-DataFile* datafile_crunch(DataFile *file, PackParams *params, RefEdgeFactory *edge_factory, int show_progress);
+DataFile* datafile_crunch(DataFile *file, PackParams *params, RefEdgeFactory *edge_factory, int show_progress, int enable_trace);

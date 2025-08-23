@@ -150,7 +150,7 @@ HunkFile* hunkfile_merge_hunks(HunkFile *file, void *hunklist) {
 	return merged;
 }
 
-HunkFile* hunkfile_crunch(HunkFile *file, PackParams *params, int overlap, int mini, int commandline, char *decrunch_text, unsigned flash_address, RefEdgeFactory *edge_factory, int show_progress) {
+HunkFile* hunkfile_crunch(HunkFile *file, PackParams *params, int overlap, int mini, int commandline, char *decrunch_text, unsigned flash_address, RefEdgeFactory *edge_factory, int show_progress, int enable_trace) {
 	// For now, just return a copy of the original file
 	// This will be implemented properly later
 	HunkFile *crunched = hunkfile_new();

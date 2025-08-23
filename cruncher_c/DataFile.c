@@ -83,7 +83,7 @@ int datafile_size(DataFile *file, int include_header) {
 	return (include_header ? sizeof(DataHeader) : 0) + file->data_size;
 }
 
-DataFile* datafile_crunch(DataFile *file, PackParams *params, RefEdgeFactory *edge_factory, int show_progress) {
+DataFile* datafile_crunch(DataFile *file, PackParams *params, RefEdgeFactory *edge_factory, int show_progress, int enable_trace) {
 	printf("Original");
 	for (int p = 1 ; p <= params->iterations ; p++) {
 		printf("  After %d%s pass", p, p == 1 ? "st" : p == 2 ? "nd" : p == 3 ? "rd" : "th");
@@ -101,12 +101,14 @@ DataFile* datafile_crunch(DataFile *file, PackParams *params, RefEdgeFactory *ed
 		return NULL;
 	}
 	
-	// Enable tracing if requested (we'll need to pass this from main)
-	// For now, let's enable tracing by default for testing
-	FILE *trace_file = fopen("trace_c.log", "w");
-	if (trace_file) {
-		rangecoder_set_trace(range_coder, trace_file);
-		fprintf(trace_file, "=== C VERSION TRACE START ===\n");
+	// Enable tracing only if explicitly requested
+	FILE *trace_file = NULL;
+	if (enable_trace) {
+		trace_file = fopen("trace_c.log", "w");
+		if (trace_file) {
+			rangecoder_set_trace(range_coder, trace_file);
+			fprintf(trace_file, "=== C VERSION TRACE START ===\n");
+		}
 	}
 	
 	// Reset the range coder

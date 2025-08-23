@@ -277,7 +277,7 @@ class LZParser {
 		}
 	}
 
-	void newEdge(RefEdge *source, int pos, int offset, int length) {
+	void newEdge(RefEdge *source, int pos, int offset, int length, FILE *trace_file = NULL) {
 		if (source && offset == source->offset && pos == source->target()) return;
 		int prev_target = source ? source->target() : 0;
 		int new_target = pos + length;
@@ -291,6 +291,12 @@ class LZParser {
 			if (!clean_worst_edge(pos, source)) break;
 		}
 		RefEdge *new_edge = edge_factory->create(pos, offset, length, size_before + edge_size + size_after, source);
+		if (trace_file) {
+			fprintf(trace_file, "LZPARSER: DECISION pos=%d offset=%d length=%d total_size=%d reason=NEW_EDGE\n",
+				pos, offset, length, size_before + edge_size + size_after);
+			fprintf(trace_file, "LZPARSER: EDGE_CREATED pos=%d offset=%d length=%d total_cost=%d source_offset=%d source_pos=%d\n",
+				pos, offset, length, size_before + edge_size + size_after, source ? source->offset : 0, source ? source->pos : 0);
+		}
 		put_by_offset(edges_to_pos[new_target], new_edge);
 	}
 
@@ -303,7 +309,7 @@ public:
 		best = NULL;
 	}
 
-	LZParseResult parse(const LZEncoder& encoder, LZProgress *progress) {
+	LZParseResult parse(const LZEncoder& encoder, LZProgress *progress, FILE *trace_file = NULL) {
 		progress->begin(data_length);
 		encoderp = &encoder;
 
@@ -328,9 +334,23 @@ public:
 		best = initial_best;
 		for (int pos = 1 ; pos <= data_length ; pos++) {
 			// Assimilate edges ending here
+			if (trace_file) {
+				fprintf(trace_file, "LZPARSER: ASSIMILATE_START pos=%d best_offset=%d best_total=%d edges_count=%d\n", 
+					pos, best ? best->offset : 0, best ? best->total_size : 0, edges_to_pos[pos].size());
+			}
 			for (CuckooHash<RefEdge*>::iterator it = edges_to_pos[pos].begin() ; it != edges_to_pos[pos].end() ; it++) {
 				RefEdge *edge = it->second;
-				if (edge->total_size < best->total_size) {
+				if (trace_file) {
+					fprintf(trace_file, "LZPARSER: ASSIMILATE_EDGE pos=%d edge_offset=%d edge_total=%d best_total=%d will_update=%d\n",
+						pos, edge->offset, edge->total_size, best->total_size, 
+						(edge->total_size < best->total_size || (edge->total_size == best->total_size && edge->offset < best->offset)));
+				}
+				if (edge->total_size < best->total_size ||
+					(edge->total_size == best->total_size && edge->offset < best->offset)) {
+					if (trace_file) {
+						fprintf(trace_file, "LZPARSER: BEST_UPDATED pos=%d new_best_offset=%d new_best_total=%d\n",
+							pos, edge->offset, edge->total_size);
+					}
 					best = edge;
 				}
 				remove_root(edge);
@@ -351,10 +371,19 @@ public:
 				int min_length = match_length - length_margin;
 				if (min_length < 2) min_length = 2;
 				for (int length = min_length ; length <= match_length ; length++) {
-					newEdge(best, pos, offset, length);
+					if (trace_file) {
+						fprintf(trace_file, "LZPARSER: EDGE_ATTEMPT pos=%d offset=%d length=%d best_offset=%d\n",
+							pos, offset, length, best ? best->offset : 0);
+					}
+					newEdge(best, pos, offset, length, trace_file);
+					if (trace_file) {
+						fprintf(trace_file, "LZPARSER: CONDITION_EVAL pos=%d offset=%d length=%d best_offset=%d count=%d condition=%d\n",
+							pos, offset, length, best ? best->offset : 0, best_for_offset.count(offset), 
+							(best->offset != offset && best_for_offset.count(offset)));
+					}
 					if (best->offset != offset && best_for_offset.count(offset)) {
 						assert(best_for_offset[offset]->target() <= pos);
-						newEdge(best_for_offset[offset], pos, offset, length);
+						newEdge(best_for_offset[offset], pos, offset, length, trace_file);
 					}
 				}
 				max_match_length = max(max_match_length, match_length);

@@ -54,10 +54,10 @@ PASSED_TESTS=0
 FAILED_TESTS=0
 
 # Compression ratio statistics
-TOTAL_C_RATIO=0
-TOTAL_CPP_RATIO=0
-TOTAL_MINI_RATIO=0
-RATIO_COUNT=0
+TOTAL_ORIGINAL_SIZE=0
+TOTAL_C_COMPRESSED_SIZE=0
+TOTAL_CPP_COMPRESSED_SIZE=0
+TOTAL_MINI_COMPRESSED_SIZE=0
 
 # Function to clean temporary files
 cleanup() {
@@ -76,31 +76,31 @@ exit_handler() {
         log_error "Failed tests: $FAILED_TESTS"
     fi
     
-    if [ $RATIO_COUNT -gt 0 ]; then
+    if [ $TOTAL_ORIGINAL_SIZE -gt 0 ]; then
         echo
         log_info "=== COMPRESSION RATIO SUMMARY ==="
-        local avg_c=$(echo "scale=2; $TOTAL_C_RATIO / $RATIO_COUNT" | bc -l 2>/dev/null || echo "N/A")
-        local avg_cpp=$(echo "scale=2; $TOTAL_CPP_RATIO / $RATIO_COUNT" | bc -l 2>/dev/null || echo "N/A")
-        local avg_mini=$(echo "scale=2; $TOTAL_MINI_RATIO / $RATIO_COUNT" | bc -l 2>/dev/null || echo "N/A")
+        local total_c_ratio=$(echo "scale=2; $TOTAL_C_COMPRESSED_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+        local total_cpp_ratio=$(echo "scale=2; $TOTAL_CPP_COMPRESSED_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+        local total_mini_ratio=$(echo "scale=2; $TOTAL_MINI_COMPRESSED_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
         
-        log_info "Average compression ratios:"
-        log_info "  CShrinkler: ${avg_c}%"
-        log_info "  Shrinkler:  ${avg_cpp}%"
-        log_mini "  Minishrinkler: ${avg_mini}%"
+        log_info "Total compression ratios (${TOTAL_ORIGINAL_SIZE} bytes total):"
+        log_info "  CShrinkler: ${TOTAL_C_COMPRESSED_SIZE} bytes (${total_c_ratio}%)"
+        log_info "  Shrinkler:  ${TOTAL_CPP_COMPRESSED_SIZE} bytes (${total_cpp_ratio}%)"
+        log_mini "  Minishrinkler: ${TOTAL_MINI_COMPRESSED_SIZE} bytes (${total_mini_ratio}%)"
         
-        if [ "$avg_c" != "N/A" ] && [ "$avg_cpp" != "N/A" ] && [ "$avg_mini" != "N/A" ]; then
+        if [ "$total_c_ratio" != "N/A" ] && [ "$total_cpp_ratio" != "N/A" ] && [ "$total_mini_ratio" != "N/A" ]; then
             echo
             log_info "Performance comparison:"
-            if (( $(echo "$avg_mini < $avg_cpp" | bc -l) )); then
-                log_success "✓ Minishrinkler beats Shrinkler by $(echo "scale=2; $avg_cpp - $avg_mini" | bc -l)%"
+            if (( $(echo "$total_mini_ratio < $total_cpp_ratio" | bc -l) )); then
+                log_success "✓ Minishrinkler beats Shrinkler by $(echo "scale=2; $total_cpp_ratio - $total_mini_ratio" | bc -l)%"
             else
-                log_warning "⚠ Minishrinkler is $(echo "scale=2; $avg_mini - $avg_cpp" | bc -l)% worse than Shrinkler"
+                log_warning "⚠ Minishrinkler is $(echo "scale=2; $total_mini_ratio - $total_cpp_ratio" | bc -l)% worse than Shrinkler"
             fi
             
-            if (( $(echo "$avg_mini < $avg_c" | bc -l) )); then
-                log_success "✓ Minishrinkler beats CShrinkler by $(echo "scale=2; $avg_c - $avg_mini" | bc -l)%"
+            if (( $(echo "$total_mini_ratio < $total_c_ratio" | bc -l) )); then
+                log_success "✓ Minishrinkler beats CShrinkler by $(echo "scale=2; $total_c_ratio - $total_mini_ratio" | bc -l)%"
             else
-                log_warning "⚠ Minishrinkler is $(echo "scale=2; $avg_mini - $avg_c" | bc -l)% worse than CShrinkler"
+                log_warning "⚠ Minishrinkler is $(echo "scale=2; $total_mini_ratio - $total_c_ratio" | bc -l)% worse than CShrinkler"
             fi
         fi
     fi
@@ -488,10 +488,10 @@ test_file() {
     log_mini "  Minishrinkler: ${mini_size} bytes (${mini_ratio}%)"
     
     # Update statistics
-    TOTAL_C_RATIO=$(echo "$TOTAL_C_RATIO + $c_ratio" | bc -l 2>/dev/null || echo "$TOTAL_C_RATIO")
-    TOTAL_CPP_RATIO=$(echo "$TOTAL_CPP_RATIO + $cpp_ratio" | bc -l 2>/dev/null || echo "$TOTAL_CPP_RATIO")
-    TOTAL_MINI_RATIO=$(echo "$TOTAL_MINI_RATIO + $mini_ratio" | bc -l 2>/dev/null || echo "$TOTAL_MINI_RATIO")
-    RATIO_COUNT=$((RATIO_COUNT + 1))
+    TOTAL_ORIGINAL_SIZE=$((TOTAL_ORIGINAL_SIZE + original_size))
+    TOTAL_C_COMPRESSED_SIZE=$((TOTAL_C_COMPRESSED_SIZE + c_size))
+    TOTAL_CPP_COMPRESSED_SIZE=$((TOTAL_CPP_COMPRESSED_SIZE + cpp_size))
+    TOTAL_MINI_COMPRESSED_SIZE=$((TOTAL_MINI_COMPRESSED_SIZE + mini_size))
     
     return 0
 }

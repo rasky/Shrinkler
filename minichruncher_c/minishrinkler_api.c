@@ -24,8 +24,8 @@
 #define tracef(fmt, ...) ((void)0)
 #endif
 
-// Configuration
-#define MAX_FILE_SIZE (1024*1024*100)  // 100MB max
+// Configuration - Embedded optimized
+#define MAX_FILE_SIZE (1024*1024)  // 1MB max for embedded
 #define MAX_MATCH_LENGTH 65535
 #define MAX_OFFSET 65535
 #define MIN_MATCH_LENGTH 3
@@ -45,50 +45,54 @@
 #define CONTEXT_GROUP_OFFSET 2
 #define CONTEXT_GROUP_LENGTH 3
 
-#define HASH_SIZE 65536
+// Embedded memory optimization: reduced hash table
+#define HASH_SIZE 1024  // Reduced from 65536 to 1024 (8KB instead of 512KB)
 #define HASH_MASK (HASH_SIZE - 1)
 
-// Data structures
+// Data structures - Embedded optimized
 typedef struct {
     uint16_t contexts[NUM_CONTEXTS];
     uint8_t *output;
-    int output_size;
-    int output_capacity;
-    int dest_bit;
+    uint16_t output_size;    
+    uint16_t output_capacity;
+    int16_t dest_bit;        
     uint32_t intervalsize;
     uint32_t intervalmin;
 } RangeCoder;
 
 typedef struct {
-    int after_first;
-    int prev_was_ref;
-    int parity;
-    int last_offset;
+    uint16_t after_first;     
+    uint16_t prev_was_ref;    
+    uint16_t parity;          
+    uint16_t last_offset;
 } LZState;
 
 typedef struct {
-    int pos;
-    int next;
+    uint16_t pos; 
+    uint16_t next;
 } HashEntry;
 
-// Precomputed tables
-static int size_table[128];
-static int size_table_init = 0;
+// Embedded memory optimization: no static allocations
+// All memory will be allocated dynamically in a single buffer
 
-// Hash table for match finding
-static HashEntry hash_table[HASH_SIZE];
+// Memory layout structure for embedded allocation
+typedef struct {
+    int size_table[128];
+    HashEntry hash_table[HASH_SIZE];
+    int size_table_init;
+} EmbeddedMemory;
 
 // Utility functions
 static int min(int a, int b) { return a < b ? a : b; }
 
 // Initialize size table
-static void init_size_table() {
-    if (size_table_init) return;
+static void init_size_table(EmbeddedMemory *mem) {
+    if (mem->size_table_init) return;
     
     for (int i = 0; i < 128; i++) {
-        size_table[i] = (int) floor(0.5 + (8.0 - log((double) (128 + i)) / log(2.0)) * (1 << 6));
+        mem->size_table[i] = (int) floor(0.5 + (8.0 - log((double) (128 + i)) / log(2.0)) * (1 << 6));
     }
-    size_table_init = 1;
+    mem->size_table_init = 1;
 }
 
 // Hash function for 3-byte sequences
@@ -97,17 +101,17 @@ static unsigned int hash3(const unsigned char *data) {
 }
 
 // Initialize hash table
-static void init_hash_table() {
-    memset(hash_table, 0, sizeof(hash_table));
+static void init_hash_table(EmbeddedMemory *mem) {
+    memset(mem->hash_table, 0, sizeof(mem->hash_table));
 }
 
 // Update hash table with new position
-static void update_hash(const unsigned char *data, int pos, int data_size) {
+static void update_hash(EmbeddedMemory *mem, const unsigned char *data, int pos, int data_size) {
     if (pos + 2 >= data_size) return;
     
     unsigned int hash = hash3(&data[pos]);
-    hash_table[hash].next = hash_table[hash].pos;
-    hash_table[hash].pos = pos;
+    mem->hash_table[hash].next = mem->hash_table[hash].pos;
+    mem->hash_table[hash].pos = pos;
 }
 
 // Exact copy of original RangeCoder logic (adapted for static allocation)
@@ -174,7 +178,7 @@ static void add_bit(RangeCoder *coder) {
 }
 
 // Exact copy of original rangecoder_code function
-static int range_coder_code(RangeCoder *coder, int context_index, int bit) {
+static int range_coder_code(RangeCoder *coder, EmbeddedMemory *mem, int context_index, int bit) {
     // Handle special context indices
     if (context_index < 0) {
         // Special contexts like CONTEXT_REPEATED (-1) are handled differently
@@ -186,9 +190,9 @@ static int range_coder_code(RangeCoder *coder, int context_index, int bit) {
     int size_before;
     if (coder->dest_bit < 0) {
         // Initial state: dest_bit is -1, so size is just the sizetable entry
-        size_before = size_table[(coder->intervalsize - 0x8000) >> 8];
+        size_before = mem->size_table[(coder->intervalsize - 0x8000) >> 8];
     } else {
-        size_before = (coder->dest_bit << 6) + size_table[(coder->intervalsize - 0x8000) >> 8];  // BIT_PRECISION = 6
+        size_before = (coder->dest_bit << 6) + mem->size_table[(coder->intervalsize - 0x8000) >> 8];  // BIT_PRECISION = 6
     }
     
     // Trace the input state
@@ -237,9 +241,9 @@ static int range_coder_code(RangeCoder *coder, int context_index, int bit) {
     int size_after;
     if (coder->dest_bit < 0) {
         // Initial state: dest_bit is -1, so size is just the sizetable entry
-        size_after = size_table[(coder->intervalsize - 0x8000) >> 8];
+        size_after = mem->size_table[(coder->intervalsize - 0x8000) >> 8];
     } else {
-        size_after = (coder->dest_bit << 6) + size_table[(coder->intervalsize - 0x8000) >> 8];  // BIT_PRECISION = 6
+        size_after = (coder->dest_bit << 6) + mem->size_table[(coder->intervalsize - 0x8000) >> 8];  // BIT_PRECISION = 6
     }
     int size_diff = size_after - size_before;
     
@@ -301,7 +305,7 @@ static void lz_state_init(LZState *state) {
     state->last_offset = 0;
 }
 
-static int encode_literal(RangeCoder *coder, unsigned char value, LZState *state) {
+static int encode_literal(RangeCoder *coder, EmbeddedMemory *mem, unsigned char value, LZState *state) {
     int parity = state->parity & 1;
     int size = 0;
     
@@ -310,7 +314,7 @@ static int encode_literal(RangeCoder *coder, unsigned char value, LZState *state
            value, (value >= 32 && value <= 126) ? value : '.', parity, state->after_first);
     
     if (state->after_first) {
-        range_coder_code(coder, 1 + CONTEXT_KIND + (parity << 8), 0); // KIND_LIT
+        range_coder_code(coder, mem, 1 + CONTEXT_KIND + (parity << 8), 0); // KIND_LIT
         size++;
     }
     
@@ -318,7 +322,7 @@ static int encode_literal(RangeCoder *coder, unsigned char value, LZState *state
     for (int i = 7; i >= 0; i--) {
         int bit = ((value >> i) & 1);
         int actual_context = 1 + ((parity << 8) | context);  // Correct context calculation
-        range_coder_code(coder, actual_context, bit);
+        range_coder_code(coder, mem, actual_context, bit);
         size++;
         context = (context << 1) | bit;
     }
@@ -332,7 +336,7 @@ static int encode_literal(RangeCoder *coder, unsigned char value, LZState *state
 }
 
 // Exact copy of coder_encode_number from cruncher_c/Coder.c (adapted for RangeCoder)
-static int encode_number(RangeCoder *coder, int context_group, int number) {
+static int encode_number(RangeCoder *coder, EmbeddedMemory *mem, int context_group, int number) {
     int base_context = 1 + (context_group << 8);
     
     // Trace number encoding start
@@ -354,21 +358,21 @@ static int encode_number(RangeCoder *coder, int context_group, int number) {
         context = base_context + (i * 2 + 2);
         tracef("  CONTINUE_BIT: i=%d context=%d bit=1 (4<<i=%d <= %d)\n", 
                i, context, (4 << i), number);
-        size += range_coder_code(coder, context, 1);
+        size += range_coder_code(coder, mem, context, 1);
     }
     
     // Stop bit (exact copy)
     context = base_context + (i * 2 + 2);
     tracef("  STOP_BIT: i=%d context=%d bit=0 (4<<i=%d > %d)\n", 
            i, context, (4 << i), number);
-    size += range_coder_code(coder, context, 0);
+    size += range_coder_code(coder, mem, context, 0);
     
     // Second loop: actual bits (exact copy)
     for (; i >= 0 ; i--) {
         int bit = ((number >> i) & 1);
         context = base_context + (i * 2 + 1);
         tracef("  NUMBER_BIT: i=%d context=%d bit=%d (number>>%d&1)\n", i, context, bit, i);
-        size += range_coder_code(coder, context, bit);
+        size += range_coder_code(coder, mem, context, bit);
     }
     
     tracef("ENCODE_NUMBER: COMPLETE size=%d\n", size);
@@ -376,7 +380,7 @@ static int encode_number(RangeCoder *coder, int context_group, int number) {
     return size;
 }
 
-static int encode_reference(RangeCoder *coder, int offset, int length, LZState *state) {
+static int encode_reference(RangeCoder *coder, EmbeddedMemory *mem, int offset, int length, LZState *state) {
     int parity = state->parity & 1;
     int size = 0;
     
@@ -386,26 +390,26 @@ static int encode_reference(RangeCoder *coder, int offset, int length, LZState *
            offset, length, parity, state->prev_was_ref, state->last_offset);
     tracef("KIND_REF: context=%d bit=1\n", 1 + CONTEXT_KIND + (parity << 8));
     
-    range_coder_code(coder, 1 + CONTEXT_KIND + (parity << 8), 1); // KIND_REF
+    range_coder_code(coder, mem, 1 + CONTEXT_KIND + (parity << 8), 1); // KIND_REF
     size++;
     
     if (!state->prev_was_ref) {
         int repeated = offset == state->last_offset;
         tracef("REPEATED: context=%d bit=%d (offset %s last_offset)\n", 
                1 + CONTEXT_REPEATED, repeated, repeated ? "==" : "!=");
-        range_coder_code(coder, 1 + CONTEXT_REPEATED, repeated);
+        range_coder_code(coder, mem, 1 + CONTEXT_REPEATED, repeated);
         size++;
     }
     
     if (offset != state->last_offset) {
         tracef("ENCODE_OFFSET: offset=%d (encoded as %d)\n", offset, offset + 2);
-        size += encode_number(coder, CONTEXT_GROUP_OFFSET, offset + 2);
+        size += encode_number(coder, mem, CONTEXT_GROUP_OFFSET, offset + 2);
     } else {
         tracef("SKIP_OFFSET: offset=%d same as last_offset\n", offset);
     }
     
     tracef("ENCODE_LENGTH: length=%d\n", length);
-    size += encode_number(coder, CONTEXT_GROUP_LENGTH, length);
+    size += encode_number(coder, mem, CONTEXT_GROUP_LENGTH, length);
     
     // Update state
     state->after_first = 1;
@@ -422,7 +426,7 @@ static int encode_reference(RangeCoder *coder, int offset, int length, LZState *
 }
 
 // Improved Match Finder using hash table
-static int find_match(const unsigned char *data, int data_size, int pos, 
+static int find_match(EmbeddedMemory *mem, const unsigned char *data, int data_size, int pos, 
                      int *best_offset, int *best_length) {
     *best_length = 0;
     *best_offset = 0;
@@ -434,7 +438,7 @@ static int find_match(const unsigned char *data, int data_size, int pos,
     
     // Use hash table to find potential matches
     unsigned int hash = hash3(&data[pos]);
-    int candidate_pos = hash_table[hash].pos;
+    int candidate_pos = mem->hash_table[hash].pos;
     int matches_checked = 0;
     const int max_matches = 32; // Limit number of candidates to check
     
@@ -461,7 +465,7 @@ static int find_match(const unsigned char *data, int data_size, int pos,
             if (match_len >= 16) break;
         }
         
-        candidate_pos = hash_table[hash].next;
+        candidate_pos = mem->hash_table[hash].next;
         matches_checked++;
     }
     
@@ -475,9 +479,19 @@ static int compress_data(const unsigned char *input, int input_size,
     LZState state;
     int pos = 0;
     
+    // Allocate embedded memory
+    EmbeddedMemory *mem = malloc(sizeof(EmbeddedMemory));
+    if (!mem) {
+        fprintf(stderr, "Error: Memory allocation failed\n");
+        return -4; // Memory allocation failed
+    }
+    
+    // Initialize memory to zero
+    memset(mem, 0, sizeof(EmbeddedMemory));
+    
     // Initialize
-    init_size_table();
-    init_hash_table();
+    init_size_table(mem);
+    init_hash_table(mem);
     range_coder_init(&coder, output, output_capacity);
     lz_state_init(&state);
     
@@ -494,20 +508,20 @@ static int compress_data(const unsigned char *input, int input_size,
     // Compression
     while (pos < input_size) {
         // Update hash table
-        update_hash(input, pos, input_size);
+        update_hash(mem, input, pos, input_size);
         
         int best_offset, best_length;
         
-        if (find_match(input, input_size, pos, &best_offset, &best_length)) {
+        if (find_match(mem, input, input_size, pos, &best_offset, &best_length)) {
             // Encode reference
             tracef("POS %d: MATCH offset=%d length=%d\n", pos, best_offset, best_length);
-            encode_reference(&coder, best_offset, best_length, &state);
+            encode_reference(&coder, mem, best_offset, best_length, &state);
             pos += best_length;
         } else {
             // Encode literal
             tracef("POS %d: LITERAL 0x%02x (%c)\n", pos, input[pos], 
                    (input[pos] >= 32 && input[pos] <= 126) ? input[pos] : '.');
-            encode_literal(&coder, input[pos], &state);
+            encode_literal(&coder, mem, input[pos], &state);
             pos++;
         }
     }
@@ -515,15 +529,18 @@ static int compress_data(const unsigned char *input, int input_size,
     // Encode end marker (offset 0)
     tracef("END: ENCODE_END_MARKER\n");
     int parity = state.parity & 1;
-    range_coder_code(&coder, 1 + CONTEXT_KIND + (parity << 8), 1); // KIND_REF
-    range_coder_code(&coder, 1 + CONTEXT_REPEATED, 0); // Not repeated
-    encode_number(&coder, CONTEXT_GROUP_OFFSET, 2); // Offset 0 + 2 = 2 = end
+    range_coder_code(&coder, mem, 1 + CONTEXT_KIND + (parity << 8), 1); // KIND_REF
+    range_coder_code(&coder, mem, 1 + CONTEXT_REPEATED, 0); // Not repeated
+    encode_number(&coder, mem, CONTEXT_GROUP_OFFSET, 2); // Offset 0 + 2 = 2 = end
 
     // Finalize
     range_coder_finish(&coder);
 
     tracef("=== COMPRESSION COMPLETE ===\n");
     tracef("Final output size: %d bytes\n", coder.output_size);
+    
+    // Free embedded memory
+    free(mem);
     
     return coder.output_size;
 }

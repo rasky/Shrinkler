@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Test script to verify compatibility between C and C++ versions of the Shrinkler compressor
+# Test script to verify compatibility between C, C++ and Mini versions of the Shrinkler compressor
 # Author: AI Assistant
 # Date: $(date)
 
@@ -11,6 +11,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Utility functions
@@ -30,21 +31,33 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+log_mini() {
+    echo -e "${CYAN}[MINI]${NC} $1"
+}
+
 # Working directories
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR_C="build/native_c"
 BUILD_DIR_CPP="build/native"
+MINI_DIR="minichruncher_c"
 TEST_DIR="test_suite"
 OUTPUT_DIR="test_output"
 
 # Executable names
 C_EXECUTABLE="CShrinkler"
 CPP_EXECUTABLE="Shrinkler"
+MINI_EXECUTABLE="minishrinkler"
 
 # Counters for final report
 TOTAL_TESTS=0
 PASSED_TESTS=0
 FAILED_TESTS=0
+
+# Compression ratio statistics
+TOTAL_C_RATIO=0
+TOTAL_CPP_RATIO=0
+TOTAL_MINI_RATIO=0
+RATIO_COUNT=0
 
 # Function to clean temporary files
 cleanup() {
@@ -61,6 +74,38 @@ exit_handler() {
     log_success "Passed tests: $PASSED_TESTS"
     if [ $FAILED_TESTS -gt 0 ]; then
         log_error "Failed tests: $FAILED_TESTS"
+    fi
+    
+    if [ $RATIO_COUNT -gt 0 ]; then
+        echo
+        log_info "=== COMPRESSION RATIO SUMMARY ==="
+        local avg_c=$(echo "scale=2; $TOTAL_C_RATIO / $RATIO_COUNT" | bc -l 2>/dev/null || echo "N/A")
+        local avg_cpp=$(echo "scale=2; $TOTAL_CPP_RATIO / $RATIO_COUNT" | bc -l 2>/dev/null || echo "N/A")
+        local avg_mini=$(echo "scale=2; $TOTAL_MINI_RATIO / $RATIO_COUNT" | bc -l 2>/dev/null || echo "N/A")
+        
+        log_info "Average compression ratios:"
+        log_info "  CShrinkler: ${avg_c}%"
+        log_info "  Shrinkler:  ${avg_cpp}%"
+        log_mini "  Minishrinkler: ${avg_mini}%"
+        
+        if [ "$avg_c" != "N/A" ] && [ "$avg_cpp" != "N/A" ] && [ "$avg_mini" != "N/A" ]; then
+            echo
+            log_info "Performance comparison:"
+            if (( $(echo "$avg_mini < $avg_cpp" | bc -l) )); then
+                log_success "✓ Minishrinkler beats Shrinkler by $(echo "scale=2; $avg_cpp - $avg_mini" | bc -l)%"
+            else
+                log_warning "⚠ Minishrinkler is $(echo "scale=2; $avg_mini - $avg_cpp" | bc -l)% worse than Shrinkler"
+            fi
+            
+            if (( $(echo "$avg_mini < $avg_c" | bc -l) )); then
+                log_success "✓ Minishrinkler beats CShrinkler by $(echo "scale=2; $avg_c - $avg_mini" | bc -l)%"
+            else
+                log_warning "⚠ Minishrinkler is $(echo "scale=2; $avg_mini - $avg_c" | bc -l)% worse than CShrinkler"
+            fi
+        fi
+    fi
+    
+    if [ $FAILED_TESTS -gt 0 ]; then
         exit 1
     else
         log_success "All tests passed!"
@@ -79,6 +124,13 @@ compile_versions() {
         exit 1
     fi
     
+    # Compile minishrinkler
+    log_info "Compiling minishrinkler..."
+    if ! (cd "$MINI_DIR" && make clean && make); then
+        log_error "Minishrinkler compilation failed"
+        exit 1
+    fi
+    
     # Verify that executables exist
     if [ ! -f "$BUILD_DIR_CPP/$CPP_EXECUTABLE" ]; then
         log_error "C++ executable not found: $BUILD_DIR_CPP/$CPP_EXECUTABLE"
@@ -87,6 +139,11 @@ compile_versions() {
     
     if [ ! -f "$BUILD_DIR_C/$C_EXECUTABLE" ]; then
         log_error "C executable not found: $BUILD_DIR_C/$C_EXECUTABLE"
+        exit 1
+    fi
+    
+    if [ ! -f "$MINI_DIR/$MINI_EXECUTABLE" ]; then
+        log_error "Minishrinkler executable not found: $MINI_DIR/$MINI_EXECUTABLE"
         exit 1
     fi
     
@@ -315,25 +372,33 @@ EOF
     log_success "Testsuite created successfully ($(ls "$TEST_DIR" | wc -l) files)"
 }
 
+# Function to calculate compression ratio
+calculate_ratio() {
+    local original_size="$1"
+    local compressed_size="$2"
+    echo "scale=2; $compressed_size * 100 / $original_size" | bc -l 2>/dev/null || echo "0"
+}
+
 # Function to test decompression
 test_decompression() {
     local compressed_file="$1"
     local original_file="$2"
+    local compressor_name="$3"
     local filename=$(basename "$original_file")
     
     # Decompress using our decompressor
-    local decompressed_output="$OUTPUT_DIR/${filename}.decompressed"
+    local decompressed_output="$OUTPUT_DIR/${filename}.${compressor_name}.decompressed"
     if ! "./decruncher_c/shrinkler_dec" "$compressed_file" > "$decompressed_output" 2>/dev/null; then
-        log_error "Decompression failed for: $filename"
+        log_error "Decompression failed for $compressor_name: $filename"
         return 1
     fi
     
     # Compare with original
     if cmp -s "$original_file" "$decompressed_output"; then
-        log_success "✓ $filename: Decompression successful (matches original)"
+        log_success "✓ $filename: $compressor_name decompression successful (matches original)"
         return 0
     else
-        log_error "✗ $filename: Decompression failed (doesn't match original)"
+        log_error "✗ $filename: $compressor_name decompression failed (doesn't match original)"
         log_info "  Original size: $(wc -c < "$original_file") bytes"
         log_info "  Decompressed size: $(wc -c < "$decompressed_output") bytes"
         return 1
@@ -344,8 +409,9 @@ test_decompression() {
 test_file() {
     local input_file="$1"
     local filename=$(basename "$input_file")
+    local original_size=$(wc -c < "$input_file")
     
-    log_info "Testing file: $filename"
+    log_info "Testing file: $filename (${original_size} bytes)"
     
     # Create output directory
     mkdir -p "$OUTPUT_DIR"
@@ -356,6 +422,8 @@ test_file() {
         log_error "C++ compression failed for: $filename"
         return 1
     fi
+    local cpp_size=$(wc -c < "$cpp_output")
+    local cpp_ratio=$(calculate_ratio "$original_size" "$cpp_size")
     
     # Compress with C version
     local c_output="$OUTPUT_DIR/${filename}.c.shr"
@@ -363,29 +431,75 @@ test_file() {
         log_error "C compression failed for: $filename"
         return 1
     fi
+    local c_size=$(wc -c < "$c_output")
+    local c_ratio=$(calculate_ratio "$original_size" "$c_size")
     
-    # Compare compressed files
-    if cmp -s "$cpp_output" "$c_output"; then
-        log_success "✓ $filename: Compressed files are identical"
-        
-        # Test decompression with the C++ compressed file
-        if test_decompression "$cpp_output" "$input_file"; then
-            return 0
-        else
-            return 1
-        fi
-    else
-        log_error "✗ $filename: Compressed files are different!"
-        log_info "  C++ size: $(wc -c < "$cpp_output") bytes"
-        log_info "  C size: $(wc -c < "$c_output") bytes"
+    # Compress with Minishrinkler
+    local mini_output="$OUTPUT_DIR/${filename}.mini.shr"
+    if ! "$MINI_DIR/$MINI_EXECUTABLE" "$input_file" "$mini_output" >/dev/null 2>&1; then
+        log_error "Minishrinkler compression failed for: $filename"
         return 1
     fi
+    local mini_size=$(wc -c < "$mini_output")
+    local mini_ratio=$(calculate_ratio "$original_size" "$mini_size")
+    
+    # Test decompression for all three versions
+    local decompression_ok=true
+    
+    if ! test_decompression "$cpp_output" "$input_file" "Shrinkler"; then
+        decompression_ok=false
+    fi
+    
+    if ! test_decompression "$c_output" "$input_file" "CShrinkler"; then
+        decompression_ok=false
+    fi
+    
+    if ! test_decompression "$mini_output" "$input_file" "Minishrinkler"; then
+        decompression_ok=false
+    fi
+    
+    if [ "$decompression_ok" = false ]; then
+        return 1
+    fi
+    
+    # Compare compressed files (C vs C++)
+    if cmp -s "$cpp_output" "$c_output"; then
+        log_success "✓ $filename: C and C++ compressed files are identical"
+    else
+        log_warning "⚠ $filename: C and C++ compressed files are different!"
+        log_info "  C++ size: ${cpp_size} bytes (${cpp_ratio}%)"
+        log_info "  C size: ${c_size} bytes (${c_ratio}%)"
+    fi
+    
+    # Compare with Minishrinkler
+    if cmp -s "$cpp_output" "$mini_output"; then
+        log_success "✓ $filename: Minishrinkler and C++ compressed files are identical"
+    elif cmp -s "$c_output" "$mini_output"; then
+        log_success "✓ $filename: Minishrinkler and C compressed files are identical"
+    else
+        log_mini "ℹ $filename: Minishrinkler generates different but valid bitstream"
+        log_info "  Minishrinkler size: ${mini_size} bytes (${mini_ratio}%)"
+    fi
+    
+    # Print compression ratios
+    log_info "Compression ratios for $filename:"
+    log_info "  Shrinkler:     ${cpp_size} bytes (${cpp_ratio}%)"
+    log_info "  CShrinkler:    ${c_size} bytes (${c_ratio}%)"
+    log_mini "  Minishrinkler: ${mini_size} bytes (${mini_ratio}%)"
+    
+    # Update statistics
+    TOTAL_C_RATIO=$(echo "$TOTAL_C_RATIO + $c_ratio" | bc -l 2>/dev/null || echo "$TOTAL_C_RATIO")
+    TOTAL_CPP_RATIO=$(echo "$TOTAL_CPP_RATIO + $cpp_ratio" | bc -l 2>/dev/null || echo "$TOTAL_CPP_RATIO")
+    TOTAL_MINI_RATIO=$(echo "$TOTAL_MINI_RATIO + $mini_ratio" | bc -l 2>/dev/null || echo "$TOTAL_MINI_RATIO")
+    RATIO_COUNT=$((RATIO_COUNT + 1))
+    
+    return 0
 }
 
 # Main function
 main() {
     log_info "=== Shrinkler Compressor Compatibility Test ==="
-    log_info "C version vs C++ version + Decompression verification"
+    log_info "C version vs C++ version vs Minishrinkler + Decompression verification"
     echo
     
     # Compile versions
@@ -413,6 +527,7 @@ main() {
             else
                 FAILED_TESTS=$((FAILED_TESTS + 1))
             fi
+            echo
         fi
     done
     

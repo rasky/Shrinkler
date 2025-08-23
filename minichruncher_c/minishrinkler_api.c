@@ -491,19 +491,42 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
             mem->hash_table[hash].match_len = match_len;
         }
         
-        // Calculate match quality score
+        // Calculate match quality score with encoding cost consideration
         int quality = mem->hash_table[hash].quality;
         if (match_len >= 8) quality += 128;  // Higher bonus for longer matches
         if (match_len >= 16) quality += 64;  // Extra bonus for very long matches
         if (offset <= 256) quality += 64;    // Higher bonus for closer matches
         if (offset <= 64) quality += 32;     // Extra bonus for very close matches
         
+        // Consider encoding cost for better match selection
+        int encoding_cost = 0;
+        if (match_len >= 8) encoding_cost += 1;  // Extra bit for longer matches
+        if (offset >= 256) encoding_cost += 1;   // Extra bit for larger offsets
+        
+        // Adjust quality based on encoding efficiency
+        quality -= encoding_cost * 16;  // Penalize expensive encodings
+        
         // Update if we found a better match (exclude offset 0)
         if (match_len >= MIN_MATCH_LENGTH && offset > 0) {
-            // Prefer longer matches, then higher quality, then closer offsets
-            if (match_len > *best_length || 
-                (match_len == *best_length && quality > best_quality) ||
-                (match_len == *best_length && quality == best_quality && offset < *best_offset)) {
+            // Enhanced match selection with pattern recognition
+            int is_better = 0;
+            
+            // Primary criteria: length
+            if (match_len > *best_length) {
+                is_better = 1;
+            } else if (match_len == *best_length) {
+                // Secondary criteria: quality score
+                if (quality > best_quality) {
+                    is_better = 1;
+                } else if (quality == best_quality) {
+                    // Tertiary criteria: offset (prefer closer)
+                    if (offset < *best_offset) {
+                        is_better = 1;
+                    }
+                }
+            }
+            
+            if (is_better) {
                 *best_length = match_len;
                 *best_offset = offset;
                 best_quality = quality;

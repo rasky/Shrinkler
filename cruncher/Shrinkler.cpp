@@ -45,6 +45,7 @@ void usage() {
 	printf(" -T, --textfile       Print the contents of the given file before decrunching\n");
 	printf(" -f, --flash          Poke into a register (e.g. DFF180) during decrunching\n");
 	printf(" -p, --no-progress    Do not print progress info: no ANSI codes in output\n");
+	printf(" --trace              Enable detailed tracing to trace.log\n");
 	printf("\n");
 	exit(0);
 }
@@ -220,6 +221,7 @@ int main2(int argc, const char *argv[]) {
 	StringParameter textfile      ("-T", "--textfile",                             argc, argv, consumed);
 	HexParameter    flash         ("-f", "--flash",                             0, argc, argv, consumed);
 	FlagParameter   no_progress   ("-p", "--no-progress",                          argc, argv, consumed);
+	FlagParameter   trace         ("--trace", "--trace",                           argc, argv, consumed);
 
 	vector<const char*> files;
 
@@ -322,7 +324,7 @@ int main2(int argc, const char *argv[]) {
 
 		printf("Crunching...\n\n");
 		RefEdgeFactory edge_factory(references.value);
-		DataFile *crunched = orig->crunch(&params, &edge_factory, !no_progress.seen);
+		DataFile *crunched = orig->crunch(&params, &edge_factory, !no_progress.seen, trace.seen);
 		delete orig;
 		printf("References considered:%8d\n",  edge_factory.max_edge_count);
 		printf("References discarded:%9d\n\n", edge_factory.max_cleaned_edges);

@@ -44,7 +44,7 @@ class DataFile {
 	DataHeader header;
 	vector<unsigned char> data;
 
-	vector<unsigned char> compress(PackParams *params, RefEdgeFactory *edge_factory, bool show_progress) {
+	vector<unsigned char> compress(PackParams *params, RefEdgeFactory *edge_factory, bool show_progress, bool enable_trace = false) {
 		vector<unsigned char> pack_buffer;
 		RangeCoder range_coder(LZEncoder::NUM_CONTEXTS + NUM_RELOC_CONTEXTS, pack_buffer);
 
@@ -58,7 +58,7 @@ class DataFile {
 
 		// Crunch the data
 		range_coder.reset();
-		packData(&data[0], data.size(), 0, params, &range_coder, edge_factory, show_progress);
+		packData(&data[0], data.size(), 0, params, &range_coder, edge_factory, show_progress, enable_trace);
 		range_coder.finish();
 		printf("\n\n");
 		fflush(stdout);
@@ -135,8 +135,8 @@ public:
 		return (include_header ? sizeof(DataHeader) : 0) + data.size();
 	}
 
-	DataFile* crunch(PackParams *params, RefEdgeFactory *edge_factory, bool show_progress) {
-		vector<unsigned char> pack_buffer = compress(params, edge_factory, show_progress);
+	DataFile* crunch(PackParams *params, RefEdgeFactory *edge_factory, bool show_progress, bool enable_trace = false) {
+		vector<unsigned char> pack_buffer = compress(params, edge_factory, show_progress, enable_trace);
 		int margin = verify(params, pack_buffer);
 
 		printf("Minimum safety margin for overlapped decrunching: %d\n\n", margin);

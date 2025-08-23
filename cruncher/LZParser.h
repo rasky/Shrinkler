@@ -365,6 +365,10 @@ public:
 			int max_match_length = 0;
 			while (finder.nextMatch(&match_pos, &match_length)) {
 				int offset = pos - match_pos;
+				if (trace_file) {
+					fprintf(trace_file, "LZPARSER: MATCH pos=%d match_pos=%d match_length=%d offset=%d\n",
+						pos, match_pos, match_length, offset);
+				}
 				if (match_length > data_length - pos) {
 					match_length = data_length - pos;
 				}
@@ -382,6 +386,10 @@ public:
 							(best->offset != offset && best_for_offset.count(offset)));
 					}
 					if (best->offset != offset && best_for_offset.count(offset)) {
+						if (trace_file) {
+							fprintf(trace_file, "LZPARSER: SECOND_EDGE pos=%d offset=%d length=%d existing_offset=%d\n",
+								pos, offset, length, best_for_offset[offset]->offset);
+						}
 						assert(best_for_offset[offset]->target() <= pos);
 						newEdge(best_for_offset[offset], pos, offset, length, trace_file);
 					}

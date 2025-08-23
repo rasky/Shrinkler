@@ -77,7 +77,16 @@ public:
 	}
 };
 
-void packData(unsigned char *data, int data_length, int zero_padding, PackParams *params, Coder *result_coder, RefEdgeFactory *edge_factory, bool show_progress) {
+void packData(unsigned char *data, int data_length, int zero_padding, PackParams *params, Coder *result_coder, RefEdgeFactory *edge_factory, bool show_progress, bool enable_trace = false) {
+	// Open trace file if enabled
+	FILE *trace_file = NULL;
+	if (enable_trace) {
+		trace_file = fopen("trace_cpp.log", "w");
+		if (trace_file) {
+			fprintf(trace_file, "=== C++ VERSION TRACE START ===\n");
+		}
+	}
+	
 	MatchFinder finder(data, data_length, 2, params->match_patience, params->max_same_length);
 	LZParser parser(data, data_length, zero_padding, finder, params->length_margin, params->skip_length, edge_factory);
 	result_size_t real_size = 0;
@@ -100,7 +109,7 @@ void packData(unsigned char *data, int data_length, int zero_padding, PackParams
 		Coder *measurer = new SizeMeasuringCoder(counting_coder);
 		measurer->setNumberContexts(LZEncoder::NUMBER_CONTEXT_OFFSET, LZEncoder::NUM_NUMBER_CONTEXTS, data_length);
 		finder.reset();
-		result = parser.parse(LZEncoder(measurer, params->parity_context), progress);
+		result = parser.parse(LZEncoder(measurer, params->parity_context), progress, trace_file);
 		delete measurer;
 
 		// Encode result using adaptive range coding
@@ -133,4 +142,10 @@ void packData(unsigned char *data, int data_length, int zero_padding, PackParams
 	delete counting_coder;
 
 	results[best_result].encode(LZEncoder(result_coder, params->parity_context));
+	
+	// Close trace file
+	if (trace_file) {
+		fprintf(trace_file, "=== C++ VERSION TRACE END ===\n");
+		fclose(trace_file);
+	}
 }

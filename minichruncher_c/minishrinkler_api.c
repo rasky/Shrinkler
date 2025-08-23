@@ -45,8 +45,7 @@
 #define CONTEXT_GROUP_OFFSET 2
 #define CONTEXT_GROUP_LENGTH 3
 
-// Embedded memory optimization: reduced hash table
-#define HASH_SIZE 1024  // Reduced from 65536 to 1024 (8KB instead of 512KB)
+#define HASH_SIZE 1024
 #define HASH_MASK (HASH_SIZE - 1)
 
 // Data structures - Embedded optimized
@@ -58,19 +57,19 @@ typedef struct {
     int16_t dest_bit;        
     uint32_t intervalsize;
     uint32_t intervalmin;
-} RangeCoder;
+} shr_rangecoder_t;
 
 typedef struct {
     uint16_t after_first;     
     uint16_t prev_was_ref;    
     uint16_t parity;          
     uint16_t last_offset;
-} LZState;
+} shr_lzstate_t;
 
 typedef struct {
     uint16_t pos; 
     uint16_t next;
-} HashEntry;
+} shr_hash_entry_t;
 
 // Embedded memory optimization: no static allocations
 // All memory will be allocated dynamically in a single buffer
@@ -78,15 +77,15 @@ typedef struct {
 // Memory layout structure for embedded allocation
 typedef struct {
     int size_table[128];
-    HashEntry hash_table[HASH_SIZE];
+    shr_hash_entry_t hash_table[HASH_SIZE];
     int size_table_init;
-} EmbeddedMemory;
+} shr_work_buffer_t;
 
 // Utility functions
 static int min(int a, int b) { return a < b ? a : b; }
 
 // Initialize size table
-static void init_size_table(EmbeddedMemory *mem) {
+static void init_size_table(shr_work_buffer_t *mem) {
     if (mem->size_table_init) return;
     
     for (int i = 0; i < 128; i++) {
@@ -101,12 +100,12 @@ static unsigned int hash3(const unsigned char *data) {
 }
 
 // Initialize hash table
-static void init_hash_table(EmbeddedMemory *mem) {
+static void init_hash_table(shr_work_buffer_t *mem) {
     memset(mem->hash_table, 0, sizeof(mem->hash_table));
 }
 
 // Update hash table with new position
-static void update_hash(EmbeddedMemory *mem, const unsigned char *data, int pos, int data_size) {
+static void update_hash(shr_work_buffer_t *mem, const unsigned char *data, int pos, int data_size) {
     if (pos + 2 >= data_size) return;
     
     unsigned int hash = hash3(&data[pos]);
@@ -115,7 +114,7 @@ static void update_hash(EmbeddedMemory *mem, const unsigned char *data, int pos,
 }
 
 // Exact copy of original RangeCoder logic (adapted for static allocation)
-static void range_coder_init(RangeCoder *coder, uint8_t *output, int capacity) {
+static void range_coder_init(shr_rangecoder_t *coder, uint8_t *output, int capacity) {
     coder->output = output;
     coder->output_capacity = capacity;
     coder->output_size = 0;
@@ -136,10 +135,10 @@ static void range_coder_init(RangeCoder *coder, uint8_t *output, int capacity) {
 }
 
 // Forward declaration for tracing
-static void range_coder_trace_state(RangeCoder *coder, const char *operation, int context, int bit, int size);
+static void range_coder_trace_state(shr_rangecoder_t *coder, const char *operation, int context, int bit, int size);
 
 // Exact copy of original add_bit function (adapted for static allocation)
-static void add_bit(RangeCoder *coder) {
+static void add_bit(shr_rangecoder_t *coder) {
     int pos = coder->dest_bit;
     int bytepos;
     int bitmask;
@@ -178,7 +177,7 @@ static void add_bit(RangeCoder *coder) {
 }
 
 // Exact copy of original rangecoder_code function
-static int range_coder_code(RangeCoder *coder, EmbeddedMemory *mem, int context_index, int bit) {
+static int range_coder_code(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int context_index, int bit) {
     // Handle special context indices
     if (context_index < 0) {
         // Special contexts like CONTEXT_REPEATED (-1) are handled differently
@@ -253,13 +252,13 @@ static int range_coder_code(RangeCoder *coder, EmbeddedMemory *mem, int context_
     return size_diff;
 }
 
-static void range_coder_trace_state(RangeCoder *coder, const char *operation, int context, int bit, int size) {
+static void range_coder_trace_state(shr_rangecoder_t *coder, const char *operation, int context, int bit, int size) {
     tracef("RANGECODER: %s context=%d bit=%d size=%d intervalmin=0x%04x intervalsize=0x%04x dest_bit=%d\n",
            operation, context, bit, size, coder->intervalmin, coder->intervalsize, coder->dest_bit);
 }
 
 // Exact copy of original rangecoder_finish function
-static void range_coder_finish(RangeCoder *coder) {
+static void range_coder_finish(shr_rangecoder_t *coder) {
     // Trace the finish start
     tracef("RANGECODER: FINISH_START intervalmin=0x%04x intervalsize=0x%04x dest_bit=%d\n",
            coder->intervalmin, coder->intervalsize, coder->dest_bit);
@@ -298,14 +297,14 @@ static void range_coder_finish(RangeCoder *coder) {
 }
 
 // LZ Encoder
-static void lz_state_init(LZState *state) {
+static void lz_state_init(shr_lzstate_t *state) {
     state->after_first = 0;
     state->prev_was_ref = 0;
     state->parity = 0;
     state->last_offset = 0;
 }
 
-static int encode_literal(RangeCoder *coder, EmbeddedMemory *mem, unsigned char value, LZState *state) {
+static int encode_literal(shr_rangecoder_t *coder, shr_work_buffer_t *mem, unsigned char value, shr_lzstate_t *state) {
     int parity = state->parity & 1;
     int size = 0;
     
@@ -336,7 +335,7 @@ static int encode_literal(RangeCoder *coder, EmbeddedMemory *mem, unsigned char 
 }
 
 // Exact copy of coder_encode_number from cruncher_c/Coder.c (adapted for RangeCoder)
-static int encode_number(RangeCoder *coder, EmbeddedMemory *mem, int context_group, int number) {
+static int encode_number(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int context_group, int number) {
     int base_context = 1 + (context_group << 8);
     
     // Trace number encoding start
@@ -380,7 +379,7 @@ static int encode_number(RangeCoder *coder, EmbeddedMemory *mem, int context_gro
     return size;
 }
 
-static int encode_reference(RangeCoder *coder, EmbeddedMemory *mem, int offset, int length, LZState *state) {
+static int encode_reference(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int offset, int length, shr_lzstate_t *state) {
     int parity = state->parity & 1;
     int size = 0;
     
@@ -426,7 +425,7 @@ static int encode_reference(RangeCoder *coder, EmbeddedMemory *mem, int offset, 
 }
 
 // Improved Match Finder using hash table
-static int find_match(EmbeddedMemory *mem, const unsigned char *data, int data_size, int pos, 
+static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int data_size, int pos, 
                      int *best_offset, int *best_length) {
     *best_length = 0;
     *best_offset = 0;
@@ -475,19 +474,19 @@ static int find_match(EmbeddedMemory *mem, const unsigned char *data, int data_s
 // Main compression function
 static int compress_data(const unsigned char *input, int input_size, 
                         unsigned char *output, int output_capacity) {
-    RangeCoder coder;
-    LZState state;
+    shr_rangecoder_t coder;
+    shr_lzstate_t state;
     int pos = 0;
     
     // Allocate embedded memory
-    EmbeddedMemory *mem = malloc(sizeof(EmbeddedMemory));
+    shr_work_buffer_t *mem = malloc(sizeof(shr_work_buffer_t));
     if (!mem) {
         fprintf(stderr, "Error: Memory allocation failed\n");
         return -4; // Memory allocation failed
     }
     
     // Initialize memory to zero
-    memset(mem, 0, sizeof(EmbeddedMemory));
+    memset(mem, 0, sizeof(shr_work_buffer_t));
     
     // Initialize
     init_size_table(mem);
@@ -543,16 +542,6 @@ static int compress_data(const unsigned char *input, int input_size,
     free(mem);
     
     return coder.output_size;
-}
-
-// Version information
-static const char* VERSION_STRING = "Minishrinkler 1.0";
-
-/**
- * @brief Get version information
- */
-const char* minishrinkler_get_version(void) {
-    return VERSION_STRING;
 }
 
 /**

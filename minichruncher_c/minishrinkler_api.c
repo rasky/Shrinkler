@@ -45,7 +45,13 @@
 #define CONTEXT_GROUP_OFFSET 2
 #define CONTEXT_GROUP_LENGTH 3
 
-#define HASH_SIZE 768
+// Hash table configuration
+#define HASH_SIZE 921  // 4608 bytes / 5 bytes per entry
+
+// Moving window configuration (14-bit = 16KB window)
+#define HASH_WINDOW_BITS 14
+#define HASH_WINDOW_SIZE (1 << HASH_WINDOW_BITS)  // 16384
+#define HASH_WINDOW_MASK (HASH_WINDOW_SIZE - 1)   // 0x3FFF
 
 // Data structures - Embedded optimized
 typedef struct {
@@ -66,11 +72,12 @@ typedef struct {
 } shr_lzstate_t;
 
 typedef struct {
-    uint16_t pos; 
-    uint16_t next;
-    uint8_t match_len;  // Cache for match length to improve early exit
-    uint8_t quality;    // Match quality indicator (0-255)
-} shr_hash_entry_t;
+    uint32_t pos : HASH_WINDOW_BITS;      // HASH_WINDOW_BITS position (HASH_WINDOW_SIZE max)
+    uint32_t next : HASH_WINDOW_BITS;     // HASH_WINDOW_BITS next pointer
+    uint32_t match_len : 6;               // 6-bit cached match length (0-63, covers most useful matches)  
+    uint32_t quality : 6;                 // 6-bit quality indicator (0-63, good granularity)
+    // Total: 40 bits = 5 bytes exactly!
+} __attribute__((packed)) shr_hash_entry_t;
 
 // Embedded memory optimization: no static allocations
 // All memory will be allocated dynamically in a single buffer
@@ -114,23 +121,24 @@ static void update_hash(shr_work_buffer_t *mem, const unsigned char *data, int p
     
     unsigned int hash = hash3(&data[pos]);
     
-    // Calculate match quality based on data characteristics
+    // Calculate match quality based on data characteristics (6-bit: 0-63)
     uint8_t quality = 0;
     if (pos + 3 < data_size) {
         // Better quality heuristic: focus on compressible patterns
         if (data[pos] == data[pos + 1] && data[pos + 1] == data[pos + 2]) {
-            quality = 255; // Excellent quality for repeated data (RLE)
+            quality = 63;  // Excellent quality for repeated data (RLE)
         } else if (data[pos] != data[pos + 1] && data[pos + 1] != data[pos + 2] && data[pos] != data[pos + 2]) {
-            quality = 64;  // Lower quality for varied data (harder to compress)
+            quality = 16;  // Lower quality for varied data (harder to compress)
         } else {
-            quality = 128; // Medium quality for mixed patterns
+            quality = 32;  // Medium quality for mixed patterns
         }
     }
     
-    // Update hash table with new entry
+    // Update hash table with new entry (moving window of HASH_WINDOW_SIZE)
     mem->hash_table[hash].next = mem->hash_table[hash].pos;
-    mem->hash_table[hash].pos = pos;
-    mem->hash_table[hash].quality = quality;
+    // Store relative position within HASH_WINDOW_SIZE window
+    mem->hash_table[hash].pos = pos & HASH_WINDOW_MASK;
+    mem->hash_table[hash].quality = quality;  
     mem->hash_table[hash].match_len = 0; // Will be calculated during match finding
 }
 
@@ -468,7 +476,18 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
     int best_quality = 0;
     
     while (candidate_pos > 0 && matches_checked < max_matches) {
-        int offset = pos - candidate_pos;
+        // Convert relative position to absolute position within HASH_WINDOW_SIZE moving window
+        int window_base = (pos >> HASH_WINDOW_BITS) << HASH_WINDOW_BITS;  // Start of current HASH_WINDOW_SIZE window
+        int absolute_candidate_pos = window_base + candidate_pos;
+        
+        // Skip if position is in the future or too far back
+        if (absolute_candidate_pos >= pos || (pos - absolute_candidate_pos) > HASH_WINDOW_MASK) {
+            candidate_pos = mem->hash_table[hash].next;
+            matches_checked++;
+            continue;
+        }
+        
+        int offset = pos - absolute_candidate_pos;
         
         if (offset > max_offset) break;
         
@@ -483,22 +502,22 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
         // Check if we have a match
         while (match_len < max_len && 
                pos + match_len < data_size && 
-               candidate_pos + match_len < data_size &&
-               data[pos + match_len] == data[candidate_pos + match_len]) {
+               absolute_candidate_pos + match_len < data_size &&
+               data[pos + match_len] == data[absolute_candidate_pos + match_len]) {
             match_len++;
         }
         
-        // Update cached match length
+        // Update cached match length (with overflow protection)
         if (candidate_pos == mem->hash_table[hash].pos) {
-            mem->hash_table[hash].match_len = match_len;
+            mem->hash_table[hash].match_len = (match_len > 63) ? 63 : match_len;  // 6-bit max = 63
         }
         
-        // Calculate match quality score with encoding cost consideration
+        // Calculate match quality score with encoding cost consideration (6-bit scale)
         int quality = mem->hash_table[hash].quality;
-        if (match_len >= 8) quality += 128;  // Higher bonus for longer matches
-        if (match_len >= 16) quality += 64;  // Extra bonus for very long matches
-        if (offset <= 256) quality += 64;    // Higher bonus for closer matches
-        if (offset <= 64) quality += 32;     // Extra bonus for very close matches
+        if (match_len >= 8) quality += 16;   // Higher bonus for longer matches
+        if (match_len >= 16) quality += 8;   // Extra bonus for very long matches
+        if (offset <= 256) quality += 8;     // Higher bonus for closer matches
+        if (offset <= 64) quality += 4;      // Extra bonus for very close matches
         
         // Consider encoding cost for better match selection
         int encoding_cost = 0;
@@ -506,7 +525,7 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
         if (offset >= 256) encoding_cost += 1;   // Extra bit for larger offsets
         
         // Adjust quality based on encoding efficiency
-        quality -= encoding_cost * 16;  // Penalize expensive encodings
+        quality -= encoding_cost * 4;   // Penalize expensive encodings
         
         // Update if we found a better match (exclude offset 0)
         if (match_len >= MIN_MATCH_LENGTH && offset > 0) {
@@ -534,7 +553,7 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
                 best_quality = quality;
                 
                 // Early exit for excellent matches
-                if (match_len >= 16 && quality >= 200) break;
+                if (match_len >= 16 && quality >= 50) break;
             }
         }
         

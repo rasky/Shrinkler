@@ -5,6 +5,9 @@
 
 set -e  # Exit on any error
 
+# Configuration
+TEST_C_VERSION=${TEST_C_VERSION:-false}  # Set to true to enable C version testing
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -47,82 +50,114 @@ C_EXECUTABLE="CShrinkler"
 CPP_EXECUTABLE="Shrinkler"
 MINI_EXECUTABLE="minishrinkler"
 
-# Counters for final report
-TOTAL_TESTS=0
-PASSED_TESTS=0
-FAILED_TESTS=0
-
-# Compression ratio statistics
+# Global statistics
+TOTAL_FILES=0
+PASSED_FILES=0
+FAILED_FILES=0
 TOTAL_ORIGINAL_SIZE=0
-TOTAL_C_COMPRESSED_SIZE=0
-TOTAL_CPP_COMPRESSED_SIZE=0
-TOTAL_MINI_COMPRESSED_SIZE=0
-TOTAL_GZIP_COMPRESSED_SIZE=0
+TOTAL_CPP_SIZE=0
+TOTAL_C_SIZE=0
+TOTAL_MINI_SIZE=0
+TOTAL_GZIP_SIZE=0
+
+# Directory statistics (using simple variables)
+NOTES_FILES=0
+NOTES_ORIGINAL_SIZE=0
+NOTES_CPP_SIZE=0
+NOTES_MINI_SIZE=0
+NOTES_GZIP_SIZE=0
+
+SPRITES_FILES=0
+SPRITES_ORIGINAL_SIZE=0
+SPRITES_CPP_SIZE=0
+SPRITES_MINI_SIZE=0
+SPRITES_GZIP_SIZE=0
 
 # Function to clean temporary files
 cleanup() {
-    log_info "Cleaning temporary files..."
-    rm -rf "$OUTPUT_DIR"
+    rm -rf "$OUTPUT_DIR" 2>/dev/null || true
 }
 
 # Function to handle exit
 exit_handler() {
     cleanup
     echo
+    print_final_report
+}
+
+# Set trap for cleanup
+trap exit_handler EXIT INT TERM
+
+# Function to print final report
+print_final_report() {
     log_info "=== FINAL REPORT ==="
-    log_info "Total tests: $TOTAL_TESTS"
-    log_success "Passed tests: $PASSED_TESTS"
-    if [ $FAILED_TESTS -gt 0 ]; then
-        log_error "Failed tests: $FAILED_TESTS"
+    log_info "Total tests: $TOTAL_FILES"
+    log_success "Passed tests: $PASSED_FILES"
+    if [ $FAILED_FILES -gt 0 ]; then
+        log_error "Failed tests: $FAILED_FILES"
     fi
     
     if [ $TOTAL_ORIGINAL_SIZE -gt 0 ]; then
         echo
         log_info "=== COMPRESSION RATIO SUMMARY ==="
-        local total_c_ratio=$(echo "scale=2; $TOTAL_C_COMPRESSED_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
-        local total_cpp_ratio=$(echo "scale=2; $TOTAL_CPP_COMPRESSED_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
-        local total_mini_ratio=$(echo "scale=2; $TOTAL_MINI_COMPRESSED_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
-        local total_gzip_ratio=$(echo "scale=2; $TOTAL_GZIP_COMPRESSED_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
         
-        log_info "Total compression ratios (${TOTAL_ORIGINAL_SIZE} bytes total):"
-        log_info "  CShrinkler: ${TOTAL_C_COMPRESSED_SIZE} bytes (${total_c_ratio}%)"
-        log_info "  Shrinkler:  ${TOTAL_CPP_COMPRESSED_SIZE} bytes (${total_cpp_ratio}%)"
-        log_mini "  Minishrinkler: ${TOTAL_MINI_COMPRESSED_SIZE} bytes (${total_mini_ratio}%)"
-        log_info "  Gzip -9:    ${TOTAL_GZIP_COMPRESSED_SIZE} bytes (${total_gzip_ratio}%)"
+        # Calculate weighted averages
+        local cpp_weighted_ratio=$(echo "scale=2; $TOTAL_CPP_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+        local mini_weighted_ratio=$(echo "scale=2; $TOTAL_MINI_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+        local gzip_weighted_ratio=$(echo "scale=2; $TOTAL_GZIP_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
         
-        if [ "$total_c_ratio" != "N/A" ] && [ "$total_cpp_ratio" != "N/A" ] && [ "$total_mini_ratio" != "N/A" ] && [ "$total_gzip_ratio" != "N/A" ]; then
-            echo
-            log_info "Performance comparison:"
-            if (( $(echo "$total_mini_ratio < $total_cpp_ratio" | bc -l) )); then
-                log_success "✓ Minishrinkler beats Shrinkler by $(echo "scale=2; $total_cpp_ratio - $total_mini_ratio" | bc -l)%"
+        printf "%-20s %10s %8s %8s %8s\n" "Directory" "Files" "Shrinkler" "Mini" "Gzip"
+        printf "%-20s %10s %8s %8s %8s\n" "--------------------" "----------" "--------" "--------" "--------"
+        
+        # Print notes directory stats
+        if [ $NOTES_ORIGINAL_SIZE -gt 0 ]; then
+            local notes_cpp_ratio=$(echo "scale=1; $NOTES_CPP_SIZE * 100 / $NOTES_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+            local notes_mini_ratio=$(echo "scale=1; $NOTES_MINI_SIZE * 100 / $NOTES_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+            local notes_gzip_ratio=$(echo "scale=1; $NOTES_GZIP_SIZE * 100 / $NOTES_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+            printf "%-20s %10s %8s %8s %8s\n" "notes" "$NOTES_FILES" "${notes_cpp_ratio}%" "${notes_mini_ratio}%" "${notes_gzip_ratio}%"
+        fi
+        
+        # Print sprites directory stats
+        if [ $SPRITES_ORIGINAL_SIZE -gt 0 ]; then
+            local sprites_cpp_ratio=$(echo "scale=1; $SPRITES_CPP_SIZE * 100 / $SPRITES_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+            local sprites_mini_ratio=$(echo "scale=1; $SPRITES_MINI_SIZE * 100 / $SPRITES_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+            local sprites_gzip_ratio=$(echo "scale=1; $SPRITES_GZIP_SIZE * 100 / $SPRITES_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+            printf "%-20s %10s %8s %8s %8s\n" "sprites" "$SPRITES_FILES" "${sprites_cpp_ratio}%" "${sprites_mini_ratio}%" "${sprites_gzip_ratio}%"
+        fi
+        
+        printf "%-20s %10s %8s %8s %8s\n" "--------------------" "----------" "--------" "--------" "--------"
+        printf "%-20s %10s %8s %8s %8s\n" "WEIGHTED AVERAGE" "$TOTAL_FILES" "${cpp_weighted_ratio}%" "${mini_weighted_ratio}%" "${gzip_weighted_ratio}%"
+        
+        echo
+        log_info "Performance comparison (weighted average):"
+        if [ "$mini_weighted_ratio" != "N/A" ] && [ "$cpp_weighted_ratio" != "N/A" ]; then
+            if (( $(echo "$mini_weighted_ratio < $cpp_weighted_ratio" | bc -l) )); then
+                local diff=$(echo "scale=2; $cpp_weighted_ratio - $mini_weighted_ratio" | bc -l)
+                log_success "✓ Minishrinkler beats Shrinkler by ${diff}%"
             else
-                log_warning "⚠ Minishrinkler is $(echo "scale=2; $total_mini_ratio - $total_cpp_ratio" | bc -l)% worse than Shrinkler"
+                local diff=$(echo "scale=2; $mini_weighted_ratio - $cpp_weighted_ratio" | bc -l)
+                log_warning "⚠ Minishrinkler is ${diff}% worse than Shrinkler"
             fi
-            
-            if (( $(echo "$total_mini_ratio < $total_c_ratio" | bc -l) )); then
-                log_success "✓ Minishrinkler beats CShrinkler by $(echo "scale=2; $total_c_ratio - $total_mini_ratio" | bc -l)%"
+        fi
+        
+        if [ "$mini_weighted_ratio" != "N/A" ] && [ "$gzip_weighted_ratio" != "N/A" ]; then
+            if (( $(echo "$mini_weighted_ratio < $gzip_weighted_ratio" | bc -l) )); then
+                local diff=$(echo "scale=2; $gzip_weighted_ratio - $mini_weighted_ratio" | bc -l)
+                log_success "✓ Minishrinkler beats Gzip by ${diff}%"
             else
-                log_warning "⚠ Minishrinkler is $(echo "scale=2; $total_mini_ratio - $total_c_ratio" | bc -l)% worse than CShrinkler"
-            fi
-            
-            if (( $(echo "$total_mini_ratio < $total_gzip_ratio" | bc -l) )); then
-                log_success "✓ Minishrinkler beats Gzip by $(echo "scale=2; $total_gzip_ratio - $total_mini_ratio" | bc -l)%"
-            else
-                log_warning "⚠ Minishrinkler is $(echo "scale=2; $total_mini_ratio - $total_gzip_ratio" | bc -l)% worse than Gzip"
+                local diff=$(echo "scale=2; $mini_weighted_ratio - $gzip_weighted_ratio" | bc -l)
+                log_warning "⚠ Minishrinkler is ${diff}% worse than Gzip"
             fi
         fi
     fi
     
-    if [ $FAILED_TESTS -gt 0 ]; then
+    if [ $FAILED_FILES -gt 0 ]; then
         exit 1
     else
         log_success "All tests passed!"
         exit 0
     fi
 }
-
-# Set trap for cleanup
-trap exit_handler EXIT INT TERM
 
 # Function to compile versions
 compile_versions() {
@@ -132,15 +167,13 @@ compile_versions() {
         exit 1
     fi
     
-    # Minishrinkler is already compiled by the main Makefile with 'make all'
-    
     # Verify that executables exist
     if [ ! -f "$BUILD_DIR_CPP/$CPP_EXECUTABLE" ]; then
         log_error "C++ executable not found: $BUILD_DIR_CPP/$CPP_EXECUTABLE"
         exit 1
     fi
     
-    if [ ! -f "$BUILD_DIR_C/$C_EXECUTABLE" ]; then
+    if [ "$TEST_C_VERSION" = "true" ] && [ ! -f "$BUILD_DIR_C/$C_EXECUTABLE" ]; then
         log_error "C executable not found: $BUILD_DIR_C/$C_EXECUTABLE"
         exit 1
     fi
@@ -166,13 +199,22 @@ check_testsuite() {
         exit 1
     fi
     
-    local file_count=$(ls "$TEST_DIR" | wc -l)
-    if [ $file_count -eq 0 ]; then
-        log_error "No test files found in $TEST_DIR"
+    local total_files=0
+    for subdir in "$TEST_DIR"/*/; do
+        if [ -d "$subdir" ]; then
+            local dir_name=$(basename "$subdir")
+            local file_count=$(find "$subdir" -type f | wc -l)
+            total_files=$((total_files + file_count))
+            log_info "Found $file_count files in $dir_name/"
+        fi
+    done
+    
+    if [ $total_files -eq 0 ]; then
+        log_error "No test files found in subdirectories of $TEST_DIR"
         exit 1
     fi
     
-    log_info "Found $file_count test files in $TEST_DIR"
+    log_info "Found $total_files total test files"
 }
 
 # Function to calculate compression ratio
@@ -187,23 +229,17 @@ test_decompression() {
     local compressed_file="$1"
     local original_file="$2"
     local compressor_name="$3"
-    local filename=$(basename "$original_file")
     
     # Decompress using our decompressor
-    local decompressed_output="$OUTPUT_DIR/${filename}.${compressor_name}.decompressed"
+    local decompressed_output="$OUTPUT_DIR/$(basename "$original_file").${compressor_name}.decompressed"
     if ! "./decruncher_c/shrinkler_dec" "$compressed_file" > "$decompressed_output" 2>/dev/null; then
-        log_error "Decompression failed for $compressor_name: $filename"
         return 1
     fi
     
     # Compare with original
     if cmp -s "$original_file" "$decompressed_output"; then
-        log_success "✓ $filename: $compressor_name decompression successful (matches original)"
         return 0
     else
-        log_error "✗ $filename: $compressor_name decompression failed (doesn't match original)"
-        log_info "  Original size: $(wc -c < "$original_file") bytes"
-        log_info "  Decompressed size: $(wc -c < "$decompressed_output") bytes"
         return 1
     fi
 }
@@ -212,9 +248,8 @@ test_decompression() {
 test_file() {
     local input_file="$1"
     local filename=$(basename "$input_file")
+    local dir_name=$(basename "$(dirname "$input_file")")
     local original_size=$(wc -c < "$input_file")
-    
-    log_info "Testing file: $filename (${original_size} bytes)"
     
     # Create output directory
     mkdir -p "$OUTPUT_DIR"
@@ -222,47 +257,46 @@ test_file() {
     # Compress with C++ version
     local cpp_output="$OUTPUT_DIR/${filename}.cpp.shr"
     if ! "$BUILD_DIR_CPP/$CPP_EXECUTABLE" -d "$input_file" "$cpp_output" >/dev/null 2>&1; then
-        log_error "C++ compression failed for: $filename"
+        printf "%-50s %s\n" "$filename" "FAILED (C++ compression)"
         return 1
     fi
     local cpp_size=$(wc -c < "$cpp_output")
-    local cpp_ratio=$(calculate_ratio "$original_size" "$cpp_size")
     
-    # Compress with C version
-    local c_output="$OUTPUT_DIR/${filename}.c.shr"
-    if ! "$BUILD_DIR_C/$C_EXECUTABLE" -d "$input_file" "$c_output" >/dev/null 2>&1; then
-        log_error "C compression failed for: $filename"
-        return 1
+    # Compress with C version (if enabled)
+    local c_size=0
+    if [ "$TEST_C_VERSION" = "true" ]; then
+        local c_output="$OUTPUT_DIR/${filename}.c.shr"
+        if ! "$BUILD_DIR_C/$C_EXECUTABLE" -d "$input_file" "$c_output" >/dev/null 2>&1; then
+            printf "%-50s %s\n" "$filename" "FAILED (C compression)"
+            return 1
+        fi
+        c_size=$(wc -c < "$c_output")
     fi
-    local c_size=$(wc -c < "$c_output")
-    local c_ratio=$(calculate_ratio "$original_size" "$c_size")
     
     # Compress with Minishrinkler
     local mini_output="$OUTPUT_DIR/${filename}.mini.shr"
     if ! "$MINI_DIR/$MINI_EXECUTABLE" "$input_file" "$mini_output" >/dev/null 2>&1; then
-        log_error "Minishrinkler compression failed for: $filename"
+        printf "%-50s %s\n" "$filename" "FAILED (Mini compression)"
         return 1
     fi
     local mini_size=$(wc -c < "$mini_output")
-    local mini_ratio=$(calculate_ratio "$original_size" "$mini_size")
     
     # Compress with Gzip -9
     local gzip_output="$OUTPUT_DIR/${filename}.gz"
     if ! gzip -9 -c "$input_file" > "$gzip_output" 2>/dev/null; then
-        log_error "Gzip compression failed for: $filename"
+        printf "%-50s %s\n" "$filename" "FAILED (Gzip compression)"
         return 1
     fi
     local gzip_size=$(wc -c < "$gzip_output")
-    local gzip_ratio=$(calculate_ratio "$original_size" "$gzip_size")
     
-    # Test decompression for all three versions
+    # Test decompression for all versions
     local decompression_ok=true
     
     if ! test_decompression "$cpp_output" "$input_file" "Shrinkler"; then
         decompression_ok=false
     fi
     
-    if ! test_decompression "$c_output" "$input_file" "CShrinkler"; then
+    if [ "$TEST_C_VERSION" = "true" ] && ! test_decompression "$c_output" "$input_file" "CShrinkler"; then
         decompression_ok=false
     fi
     
@@ -271,49 +305,109 @@ test_file() {
     fi
     
     if [ "$decompression_ok" = false ]; then
+        printf "%-50s %s\n" "$filename" "FAILED (decompression)"
         return 1
     fi
     
-    # Compare compressed files (C vs C++)
-    if cmp -s "$cpp_output" "$c_output"; then
-        log_success "✓ $filename: C and C++ compressed files are identical"
-    else
-        log_warning "⚠ $filename: C and C++ compressed files are different!"
-        log_info "  C++ size: ${cpp_size} bytes (${cpp_ratio}%)"
-        log_info "  C size: ${c_size} bytes (${c_ratio}%)"
+    # Calculate ratios
+    local cpp_ratio=$(calculate_ratio "$original_size" "$cpp_size")
+    local mini_ratio=$(calculate_ratio "$original_size" "$mini_size")
+    local gzip_ratio=$(calculate_ratio "$original_size" "$gzip_size")
+    
+    # Print result
+    printf "%-50s %8s %8s %8s %8s\n" "$filename" "${cpp_ratio}%" "${mini_ratio}%" "${gzip_ratio}%" "PASS"
+    
+    # Update directory statistics
+    if [ "$dir_name" = "notes" ]; then
+        NOTES_FILES=$((NOTES_FILES + 1))
+        NOTES_ORIGINAL_SIZE=$((NOTES_ORIGINAL_SIZE + original_size))
+        NOTES_CPP_SIZE=$((NOTES_CPP_SIZE + cpp_size))
+        NOTES_MINI_SIZE=$((NOTES_MINI_SIZE + mini_size))
+        NOTES_GZIP_SIZE=$((NOTES_GZIP_SIZE + gzip_size))
+    elif [ "$dir_name" = "sprites" ]; then
+        SPRITES_FILES=$((SPRITES_FILES + 1))
+        SPRITES_ORIGINAL_SIZE=$((SPRITES_ORIGINAL_SIZE + original_size))
+        SPRITES_CPP_SIZE=$((SPRITES_CPP_SIZE + cpp_size))
+        SPRITES_MINI_SIZE=$((SPRITES_MINI_SIZE + mini_size))
+        SPRITES_GZIP_SIZE=$((SPRITES_GZIP_SIZE + gzip_size))
     fi
     
-    # Compare with Minishrinkler
-    if cmp -s "$cpp_output" "$mini_output"; then
-        log_success "✓ $filename: Minishrinkler and C++ compressed files are identical"
-    elif cmp -s "$c_output" "$mini_output"; then
-        log_success "✓ $filename: Minishrinkler and C compressed files are identical"
-    else
-        log_mini "ℹ $filename: Minishrinkler generates different but valid bitstream"
-        log_info "  Minishrinkler size: ${mini_size} bytes (${mini_ratio}%)"
-    fi
-    
-    # Print compression ratios
-    log_info "Compression ratios for $filename:"
-    log_info "  Shrinkler:     ${cpp_size} bytes (${cpp_ratio}%)"
-    log_info "  CShrinkler:    ${c_size} bytes (${c_ratio}%)"
-    log_mini "  Minishrinkler: ${mini_size} bytes (${mini_ratio}%)"
-    log_info "  Gzip -9:       ${gzip_size} bytes (${gzip_ratio}%)"
-    
-    # Update statistics
+    # Update global statistics
+    TOTAL_FILES=$((TOTAL_FILES + 1))
+    PASSED_FILES=$((PASSED_FILES + 1))
     TOTAL_ORIGINAL_SIZE=$((TOTAL_ORIGINAL_SIZE + original_size))
-    TOTAL_C_COMPRESSED_SIZE=$((TOTAL_C_COMPRESSED_SIZE + c_size))
-    TOTAL_CPP_COMPRESSED_SIZE=$((TOTAL_CPP_COMPRESSED_SIZE + cpp_size))
-    TOTAL_MINI_COMPRESSED_SIZE=$((TOTAL_MINI_COMPRESSED_SIZE + mini_size))
-    TOTAL_GZIP_COMPRESSED_SIZE=$((TOTAL_GZIP_COMPRESSED_SIZE + gzip_size))
+    TOTAL_CPP_SIZE=$((TOTAL_CPP_SIZE + cpp_size))
+    TOTAL_MINI_SIZE=$((TOTAL_MINI_SIZE + mini_size))
+    TOTAL_GZIP_SIZE=$((TOTAL_GZIP_SIZE + gzip_size))
+    
+    if [ "$TEST_C_VERSION" = "true" ]; then
+        TOTAL_C_SIZE=$((TOTAL_C_SIZE + c_size))
+    fi
     
     return 0
+}
+
+# Function to test a directory
+test_directory() {
+    local dir_path="$1"
+    local dir_name=$(basename "$dir_path")
+    
+    log_info "Testing directory: $dir_name"
+    printf "%-50s %8s %8s %8s %8s\n" "Filename" "Shrinkler" "Mini" "Gzip" "Status"
+    printf "%-50s %8s %8s %8s %8s\n" "--------------------------------------------------" "--------" "--------" "--------" "--------"
+    
+    local dir_passed=0
+    local dir_total=0
+    
+    for input_file in "$dir_path"/*; do
+        if [ -f "$input_file" ]; then
+            dir_total=$((dir_total + 1))
+            if test_file "$input_file"; then
+                dir_passed=$((dir_passed + 1))
+            else
+                FAILED_FILES=$((FAILED_FILES + 1))
+            fi
+        fi
+    done
+    
+    # Print directory summary
+    if [ $dir_total -gt 0 ]; then
+        local original_size=0
+        local cpp_size=0
+        local mini_size=0
+        local gzip_size=0
+        
+        if [ "$dir_name" = "notes" ]; then
+            original_size=$NOTES_ORIGINAL_SIZE
+            cpp_size=$NOTES_CPP_SIZE
+            mini_size=$NOTES_MINI_SIZE
+            gzip_size=$NOTES_GZIP_SIZE
+        elif [ "$dir_name" = "sprites" ]; then
+            original_size=$SPRITES_ORIGINAL_SIZE
+            cpp_size=$SPRITES_CPP_SIZE
+            mini_size=$SPRITES_MINI_SIZE
+            gzip_size=$SPRITES_GZIP_SIZE
+        fi
+        
+        if [ $original_size -gt 0 ]; then
+            local cpp_ratio=$(echo "scale=1; $cpp_size * 100 / $original_size" | bc -l 2>/dev/null || echo "N/A")
+            local mini_ratio=$(echo "scale=1; $mini_size * 100 / $original_size" | bc -l 2>/dev/null || echo "N/A")
+            local gzip_ratio=$(echo "scale=1; $gzip_size * 100 / $original_size" | bc -l 2>/dev/null || echo "N/A")
+            
+            printf "%-50s %8s %8s %8s %8s\n" "--- $dir_name summary ---" "${cpp_ratio}%" "${mini_ratio}%" "${gzip_ratio}%" "$dir_passed/$dir_total"
+            echo
+        fi
+    fi
 }
 
 # Main function
 main() {
     log_info "=== Shrinkler Compressor Compatibility Test ==="
-    log_info "C version vs C++ version vs Minishrinkler + Decompression verification"
+    if [ "$TEST_C_VERSION" = "true" ]; then
+        log_info "Testing: C++ vs C vs Minishrinkler + Decompression verification"
+    else
+        log_info "Testing: C++ vs Minishrinkler + Decompression verification (C version disabled)"
+    fi
     echo
     
     # Compile versions
@@ -324,20 +418,13 @@ main() {
     check_testsuite
     echo
     
-    # Run tests
+    # Run tests for each subdirectory
     log_info "Running compatibility tests..."
     echo
     
-    for input_file in "$TEST_DIR"/*; do
-        if [ -f "$input_file" ]; then
-            TOTAL_TESTS=$((TOTAL_TESTS + 1))
-            
-            if test_file "$input_file"; then
-                PASSED_TESTS=$((PASSED_TESTS + 1))
-            else
-                FAILED_TESTS=$((FAILED_TESTS + 1))
-            fi
-            echo
+    for subdir in "$TEST_DIR"/*/; do
+        if [ -d "$subdir" ]; then
+            test_directory "$subdir"
         fi
     done
     

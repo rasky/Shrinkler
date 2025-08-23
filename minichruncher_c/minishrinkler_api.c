@@ -79,6 +79,8 @@ typedef struct {
 typedef struct {
     int size_table[128];
     shr_hash_entry_t hash_table[HASH_SIZE];
+    shr_rangecoder_t coder;
+    shr_lzstate_t state;
     int size_table_init;
 } shr_work_buffer_t;
 
@@ -546,8 +548,6 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
 // Main compression function
 static int compress_data(const unsigned char *input, int input_size, 
                         unsigned char *output, int output_capacity) {
-    shr_rangecoder_t coder;
-    shr_lzstate_t state;
     int pos = 0;
     
     // Allocate embedded memory
@@ -563,8 +563,8 @@ static int compress_data(const unsigned char *input, int input_size,
     // Initialize
     init_size_table(mem);
     init_hash_table(mem);
-    range_coder_init(&coder, output, output_capacity);
-    lz_state_init(&state);
+    range_coder_init(&mem->coder, output, output_capacity);
+    lz_state_init(&mem->state);
     
     // Enable tracing
     tracef("=== MINISHRINKLER TRACE ===\n");
@@ -600,7 +600,7 @@ static int compress_data(const unsigned char *input, int input_size,
                     if (next_length > best_length + 1 || 
                         (next_length == best_length + 1 && next_cost <= current_cost)) {
                         tracef("POS %d: LAZY LITERAL 0x%02x (waiting for better match)\n", pos, input[pos]);
-                        encode_literal(&coder, mem, input[pos], &state);
+                        encode_literal(&mem->coder, mem, input[pos], &mem->state);
                         pos++;
                         continue;
                     }
@@ -609,34 +609,37 @@ static int compress_data(const unsigned char *input, int input_size,
             
             // Encode reference
             tracef("POS %d: MATCH offset=%d length=%d\n", pos, best_offset, best_length);
-            encode_reference(&coder, mem, best_offset, best_length, &state);
+            encode_reference(&mem->coder, mem, best_offset, best_length, &mem->state);
             pos += best_length;
         } else {
             // Encode literal
             tracef("POS %d: LITERAL 0x%02x (%c)\n", pos, input[pos], 
                    (input[pos] >= 32 && input[pos] <= 126) ? input[pos] : '.');
-            encode_literal(&coder, mem, input[pos], &state);
+            encode_literal(&mem->coder, mem, input[pos], &mem->state);
             pos++;
         }
     }
 
     // Encode end marker (offset 0)
     tracef("END: ENCODE_END_MARKER\n");
-    int parity = state.parity & 1;
-    range_coder_code(&coder, mem, 1 + CONTEXT_KIND + (parity << 8), 1); // KIND_REF
-    range_coder_code(&coder, mem, 1 + CONTEXT_REPEATED, 0); // Not repeated
-    encode_number(&coder, mem, CONTEXT_GROUP_OFFSET, 2); // Offset 0 + 2 = 2 = end
+    int parity = mem->state.parity & 1;
+    range_coder_code(&mem->coder, mem, 1 + CONTEXT_KIND + (parity << 8), 1); // KIND_REF
+    range_coder_code(&mem->coder, mem, 1 + CONTEXT_REPEATED, 0); // Not repeated
+    encode_number(&mem->coder, mem, CONTEXT_GROUP_OFFSET, 2); // Offset 0 + 2 = 2 = end
 
     // Finalize
-    range_coder_finish(&coder);
+    range_coder_finish(&mem->coder);
 
     tracef("=== COMPRESSION COMPLETE ===\n");
-    tracef("Final output size: %d bytes\n", coder.output_size);
+    tracef("Final output size: %d bytes\n", mem->coder.output_size);
+    
+    // Save output size before freeing memory
+    int output_size = mem->coder.output_size;
     
     // Free embedded memory
     free(mem);
     
-    return coder.output_size;
+    return output_size;
 }
 
 /**

@@ -74,13 +74,13 @@ trap exit_handler EXIT INT TERM
 # Function to compile versions
 compile_versions() {
     log_info "Compiling C++ version..."
-    if ! make clean && make; then
+    if ! make; then
         log_error "C++ version compilation failed"
         exit 1
     fi
     
     log_info "Compiling C version..."
-    if ! make -f Makefile_c clean && make -f Makefile_c; then
+    if ! make -f Makefile_c; then
         log_error "C version compilation failed"
         exit 1
     fi

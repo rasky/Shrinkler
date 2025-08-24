@@ -15,9 +15,10 @@
 #include <assert.h>
 #include <math.h>
 #include <stdarg.h>
+#include <stdbool.h>
 
 // Compile-time trace control
-#define TRACE_SHRINKLER 1
+#define TRACE_SHRINKLER 0
 
 #if TRACE_SHRINKLER
 static void tracef(const char *fmt, ...) {
@@ -69,17 +70,17 @@ static void tracef(const char *fmt, ...) {
 typedef struct {
     uint16_t contexts[NUM_CONTEXTS];
     uint8_t *output;
-    uint16_t output_size;    
-    uint16_t output_capacity;
+    uint32_t output_size;    
+    uint32_t output_capacity;
     int32_t dest_bit;        
     uint32_t intervalsize;
     uint32_t intervalmin;
 } shr_rangecoder_t;
 
 typedef struct {
-    uint16_t after_first;     
-    uint16_t prev_was_ref;    
-    uint16_t parity;          
+    bool after_first;     
+    bool prev_was_ref;    
+    int parity;                           
     uint16_t last_offset;
 } shr_lzstate_t;
 
@@ -195,7 +196,7 @@ static void add_bit(shr_rangecoder_t *coder) {
         bitmask = 0x80 >> (pos & 7);
         
         if (bytepos >= coder->output_capacity) {
-            fprintf(stderr, "Output buffer overflow\n");
+            fprintf(stderr, "Output buffer overflow: bytepos=%d, output_capacity=%d\n", bytepos, coder->output_capacity);
             exit(1);
         }
         
@@ -458,6 +459,7 @@ static int encode_reference(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int
     state->prev_was_ref = 1;
     state->parity = state->parity + length;
     state->last_offset = offset;
+    assert(offset == state->last_offset && "reference offset too large");
     
     tracef("=== ENCODE_REFERENCE END ===\n");
     tracef("STATE UPDATE: after_first=%d prev_was_ref=%d parity=%d last_offset=%d\n", 
@@ -740,6 +742,8 @@ int minishrinkler_compress(
     
     // Check if output buffer is large enough
     size_t max_compressed_size = minishrinkler_get_max_compressed_size(input_size);
+    printf("max_compressed_size: %zu\n", max_compressed_size);
+    printf("output_capacity: %zu\n", output_capacity);
     if (output_capacity < max_compressed_size) {
         return -1; // Output buffer too small
     }

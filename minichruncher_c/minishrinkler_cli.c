@@ -108,7 +108,7 @@ static bool write_file(const char *filename, const uint8_t *data, size_t size) {
 int main(int argc, char *argv[]) {
     const char *input_file = NULL;
     const char *output_file = NULL;
-    size_t window_size_kb = 4;  // Default: 4 KB
+    size_t window_size_kb = 5;  // Default: 5 KB
     
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {

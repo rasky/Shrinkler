@@ -53,27 +53,39 @@ typedef struct {
     uint64_t intervalvalue;             ///< Current interval value
 
     uint8_t *src;                       ///< Pointer to the input data
+    uint8_t *src_end;                   ///< End of input data
     int bits_left;                      ///< Number of bits left in the interval
 } shrinkler_ctx_t;
 
-static void shr_decode_init(shrinkler_ctx_t *ctx, uint8_t *src) {
+static void shr_decode_init(shrinkler_ctx_t *ctx, uint8_t *src, size_t src_size) {
     for (int i=0; i<NUM_CONTEXTS; i++)
         ctx->contexts[i] = 0x8000;
     
     ctx->intervalsize = 1;
     ctx->intervalvalue = 0;
     ctx->src = src;
+    ctx->src_end = src + src_size;
     ctx->bits_left = 0;
 
     // Adjust for 64-bit values
-    for (int i=0;i<4;i++)
+    for (int i=0;i<4;i++) {
+        if (ctx->src >= ctx->src_end) {
+            fprintf(stderr, "ERROR: Not enough data for initialization\n");
+            return;
+        }
         ctx->intervalvalue = (ctx->intervalvalue << 8) | *ctx->src++;
+    }
     ctx->intervalvalue <<= 31;
     ctx->bits_left = 1;
     ctx->intervalsize = 0x8000;
 }
 
 static inline int shr_decode_bit(shrinkler_ctx_t *ctx, int context_index) {
+    if (context_index < 0 || context_index >= NUM_CONTEXTS) {
+        fprintf(stderr, "ERROR: Invalid context index %d (valid range: 0-%d)\n", context_index, NUM_CONTEXTS-1);
+        return -1;
+    }
+    
     if (g_trace) {
         fprintf(stderr, "      SHR_DECODE_BIT: context=%d intervalsize=0x%04x intervalvalue=0x%016llx bits_left=%d\n", 
                context_index, ctx->intervalsize, ctx->intervalvalue, ctx->bits_left);
@@ -81,6 +93,11 @@ static inline int shr_decode_bit(shrinkler_ctx_t *ctx, int context_index) {
     
     while ((ctx->intervalsize < 0x8000)) {
         if (unlikely(ctx->bits_left == 0)) {
+            // Check if we have enough data to read 4 bytes
+            if (ctx->src + 4 > ctx->src_end) {
+                fprintf(stderr, "ERROR: Unexpected end of compressed data\n");
+                return -1;
+            }
             ctx->intervalvalue |= read32be(ctx->src);
             ctx->src += 4;
             ctx->bits_left = 32;
@@ -133,9 +150,16 @@ static inline int shr_decode_number(shrinkler_ctx_t *ctx, int base_context) {
     }
     
     // First loop: find number of bits
-    for (i = 0 ;; i++) {
+    for (i = 0 ; i < 16 ; i++) {  // Limit to 16 bits to prevent buffer overflow
         context = base_context + (i * 2 + 2);
+        if (context >= NUM_CONTEXTS) {
+            fprintf(stderr, "ERROR: Context index %d out of bounds (max %d)\n", context, NUM_CONTEXTS);
+            return -1;
+        }
         int continue_bit = shr_decode_bit(ctx, context);
+        if (continue_bit == -1) {
+            return -1;  // Error already reported
+        }
         if (g_trace) {
             fprintf(stderr, "    CONTINUE_BIT: i=%d context=%d bit=%d (4<<i=%d)\n", 
                    i, context, continue_bit, (4 << i));
@@ -155,7 +179,14 @@ static inline int shr_decode_number(shrinkler_ctx_t *ctx, int base_context) {
     
     for (; i >= 0 ; i--) {
         context = base_context + (i * 2 + 1);
+        if (context >= NUM_CONTEXTS) {
+            fprintf(stderr, "ERROR: Context index %d out of bounds (max %d)\n", context, NUM_CONTEXTS);
+            return -1;
+        }
         int bit = shr_decode_bit(ctx, context);
+        if (bit == -1) {
+            return -1;  // Error already reported
+        }
         int old_number = number;
         number = (number << 1) | bit;
         if (g_trace) {
@@ -172,22 +203,54 @@ static inline int shr_decode_number(shrinkler_ctx_t *ctx, int base_context) {
 }
 
 static inline int lzDecode(shrinkler_ctx_t *ctx, int context) {
-    return shr_decode_bit(ctx, NUM_SINGLE_CONTEXTS + context);
+    int result = shr_decode_bit(ctx, NUM_SINGLE_CONTEXTS + context);
+    if (result == -1) {
+        return -1;  // Error already reported
+    }
+    return result;
 }
 
 static inline int lzDecodeNumber(shrinkler_ctx_t *ctx, int context_group) {
     return shr_decode_number(ctx, NUM_SINGLE_CONTEXTS + (context_group << 8));
 }
 
-static int shr_unpack(uint8_t *dst, uint8_t *src)
+/**
+ * @brief Increase output buffer size by doubling it
+ */
+static int increase_buffer(uint8_t **dst, uint8_t **dst_start, uint8_t **dst_end, size_t *dst_size) {
+    size_t current_offset = *dst - *dst_start;
+    size_t new_size = *dst_size * 2;
+    
+    uint8_t *new_dst = realloc(*dst_start, new_size);
+    if (!new_dst) {
+        return -1;
+    }
+    
+    *dst_start = new_dst;
+    *dst = new_dst + current_offset;
+    *dst_end = new_dst + new_size;
+    *dst_size = new_size;
+        
+    return 0;
+}
+
+static int shr_unpack(uint8_t **dst_start, uint8_t *src, size_t src_size)
 {
     const int parity_mask = 1;
 
-    uint8_t *dst_start = dst;
+    // Allocate initial output buffer (same size as input)
+    size_t dst_size = src_size;
+    *dst_start = malloc(dst_size);
+    if (!*dst_start) {
+        return -1;
+    }
+    uint8_t *dst = *dst_start;
+    uint8_t *dst_end = dst + dst_size;
+        
     shrinkler_ctx_t ctx;
-    shr_decode_init(&ctx, src);
-
-    bool ref = false;
+    shr_decode_init(&ctx, src, src_size);
+    
+    int ref = false;
     bool prev_was_ref = false;
     int offset = 0;
 
@@ -197,31 +260,40 @@ static int shr_unpack(uint8_t *dst, uint8_t *src)
 
     while (1) {
         if (ref) {
-            bool repeated = false;
+            int repeated = false;
             if (!prev_was_ref) {
                 repeated = lzDecode(&ctx, CONTEXT_REPEATED);
+                if (repeated == -1) {
+                    return -1;  // Error already reported
+                }
                 if (g_trace) {
-                    fprintf(stderr, "POS %ld: DECODE_REPEATED = %s\n", dst - dst_start, repeated ? "true" : "false");
+                    fprintf(stderr, "POS %ld: DECODE_REPEATED = %s\n", dst - *dst_start, repeated ? "true" : "false");
                 }
             }
             if (!repeated) {
                 int encoded_offset = lzDecodeNumber(&ctx, CONTEXT_GROUP_OFFSET);
+                if (encoded_offset == -1) {
+                    return -1;  // Error already reported
+                }
                 offset = encoded_offset - 2;
                 if (g_trace) {
-                    fprintf(stderr, "POS %ld: DECODE_OFFSET encoded=%d offset=%d\n", dst - dst_start, encoded_offset, offset);
+                    fprintf(stderr, "POS %ld: DECODE_OFFSET encoded=%d offset=%d\n", dst - *dst_start, encoded_offset, offset);
                 }
                 if (offset == 0) {
                     if (g_trace) {
-                        fprintf(stderr, "POS %ld: END_MARKER detected\n", dst - dst_start);
+                        fprintf(stderr, "POS %ld: END_MARKER detected\n", dst - *dst_start);
                     }
                     break;
                 }
             }
             int length = lzDecodeNumber(&ctx, CONTEXT_GROUP_LENGTH);
+            if (length == -1) {
+                return -1;  // Error already reported
+            }
             if (g_trace) {
-                fprintf(stderr, "POS %ld: DECODE_LENGTH = %d\n", dst - dst_start, length);
+                fprintf(stderr, "POS %ld: DECODE_LENGTH = %d\n", dst - *dst_start, length);
                 fprintf(stderr, "POS %ld: MATCH offset=%d length=%d (copy from pos %ld)\n", 
-                       dst - dst_start, offset, length, (dst - dst_start) - offset);
+                       dst - *dst_start, offset, length, (dst - *dst_start) - offset);
             }
             prev_was_ref = true;
             
@@ -229,43 +301,69 @@ static int shr_unpack(uint8_t *dst, uint8_t *src)
             int orig_length = length;
             if (offset > 8) 
                 while (length >= 8) {
+                    // Check if we need to expand the buffer
+                    if (dst + 8 > dst_end) {
+                        if (increase_buffer(&dst, dst_start, &dst_end, &dst_size) != 0) {
+                            return -1;
+                        }
+                    }
                     memcpy(dst, dst - offset, 8);
                     dst += 8;
                     length -= 8;
                 }            
             while (length--) {
+                // Check if we need to expand the buffer
+                if (dst >= dst_end) {
+                    if (increase_buffer(&dst, dst_start, &dst_end, &dst_size) != 0) {
+                        return -1;
+                    }
+                }
                 *dst = dst[-offset];
                 dst++;
             }
             
             if (g_trace) {
                 fprintf(stderr, "POS %ld: MATCH_COMPLETE copied %d bytes to pos %ld\n", 
-                       dst - dst_start, orig_length, (dst - dst_start) - orig_length);
+                       dst - *dst_start, orig_length, (dst - *dst_start) - orig_length);
             }
         } else {
-            int parity = (dst - dst_start) & parity_mask;
+            int parity = (dst - *dst_start) & parity_mask;
             int context = 1;
             for (int i = 7 ; i >= 0 ; i--) {
                 int bit = lzDecode(&ctx, (parity << 8) | context);
+                if (bit == -1) {
+                    return -1;  // Error already reported
+                }
                 context = (context << 1) | bit;
             }
             uint8_t lit = context;
             if (g_trace) {
                 fprintf(stderr, "POS %ld: LITERAL 0x%02x (%c) parity=%d\n", 
-                       dst - dst_start, lit, (lit >= 32 && lit <= 126) ? lit : '.', parity);
+                       dst - *dst_start, lit, (lit >= 32 && lit <= 126) ? lit : '.', parity);
             }
+            
+            // Check if we need to expand the buffer
+            if (dst >= dst_end) {
+                if (increase_buffer(&dst, dst_start, &dst_end, &dst_size) != 0) {
+                    return -1;
+                }
+            }
+            
             *dst++ = lit;
             prev_was_ref = false;
         }
-        int parity = (dst - dst_start) & parity_mask;
+        int parity = (dst - *dst_start) & parity_mask;
         ref = lzDecode(&ctx, CONTEXT_KIND + (parity << 8));
+        if (ref == -1) {
+            return -1;  // Error already reported
+        }
         if (g_trace) {
             fprintf(stderr, "POS %ld: DECODE_KIND = %s (parity=%d, context=%d)\n", 
-                   dst - dst_start, ref ? "REF" : "LIT", parity, CONTEXT_KIND + (parity << 8));
+                   dst - *dst_start, ref ? "REF" : "LIT", parity, CONTEXT_KIND + (parity << 8));
         }
     }
     
-    return dst - dst_start;
+    return (int)(dst - *dst_start);
 }
 
 /**
@@ -273,11 +371,11 @@ static int shr_unpack(uint8_t *dst, uint8_t *src)
  *
  * @param src Source compressed data
  * @param src_size Size of compressed data
- * @param dst Destination buffer (must be large enough)
+ * @param dst_ptr Pointer to destination buffer (will be allocated dynamically)
  * @return Size of decompressed data, or -1 on error
  */
-int shrinkler_decompress(const uint8_t *src, size_t src_size, uint8_t *dst) {
-    if (!src || !dst) {
+int shrinkler_decompress(const uint8_t *src, size_t src_size, uint8_t **dst_ptr) {
+    if (!src || !dst_ptr) {
         return -1;
     }
     
@@ -288,7 +386,7 @@ int shrinkler_decompress(const uint8_t *src, size_t src_size, uint8_t *dst) {
     }
     
     memcpy(src_copy, src, src_size);
-    int dec_size = shr_unpack(dst, src_copy);
+    int dec_size = shr_unpack(dst_ptr, src_copy, src_size);
     free(src_copy);
     
     return dec_size;
@@ -296,6 +394,9 @@ int shrinkler_decompress(const uint8_t *src, size_t src_size, uint8_t *dst) {
 
 /**
  * @brief Read file into buffer
+ * 
+ * The decompressor reads data in 4-byte chunks, so the input file size
+ * must be padded to a multiple of 4 bytes. Any padding bytes are set to 0.
  */
 uint8_t* read_file(const char *filename, size_t *size) {
     FILE *f = fopen(filename, "rb");
@@ -305,17 +406,24 @@ uint8_t* read_file(const char *filename, size_t *size) {
     }
     
     fseek(f, 0, SEEK_END);
-    *size = ftell(f);
+    size_t original_size = ftell(f);
     fseek(f, 0, SEEK_SET);
     
-    uint8_t *data = malloc(*size);
+    // Round up to next multiple of 4 bytes for padding, plus add 4 bytes for the initial interval
+    size_t padded_size = ((original_size + 3) & ~3) + 4;
+    *size = padded_size;
+    
+    uint8_t *data = malloc(padded_size);
     if (!data) {
         fprintf(stderr, "Error: Cannot allocate memory for file\n");
         fclose(f);
         return NULL;
     }
     
-    if (fread(data, 1, *size, f) != *size) {
+    // Initialize padding bytes to 0
+    memset(data, 0, padded_size);
+    
+    if (fread(data, 1, original_size, f) != original_size) {
         fprintf(stderr, "Error: Cannot read file '%s'\n", filename);
         free(data);
         fclose(f);
@@ -405,21 +513,12 @@ int main(int argc, char *argv[]) {
         printf("Compressed size: %zu bytes\n", src_size);
     }
     
-    // Allocate output buffer (estimate size as 10x compressed size)
-    size_t dst_size = src_size * 10;
-    uint8_t *dst_data = malloc(dst_size);
-    if (!dst_data) {
-        fprintf(stderr, "Error: Cannot allocate output buffer\n");
-        free(src_data);
-        return 1;
-    }
-    
-    // Decompress
-    int dec_size = shrinkler_decompress(src_data, src_size, dst_data);
+    // Decompress (shr_unpack will allocate its own buffer dynamically)
+    uint8_t *dst_data = NULL;
+    int dec_size = shrinkler_decompress(src_data, src_size, &dst_data);
     if (dec_size < 0) {
-        fprintf(stderr, "Error: Decompression failed\n");
+        fprintf(stderr, "Error: Decompression failed: corrupted or invalid bitstream\n");
         free(src_data);
-        free(dst_data);
         return 1;
     }
     

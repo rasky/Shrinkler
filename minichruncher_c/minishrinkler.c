@@ -169,9 +169,6 @@ static void range_coder_init(shr_rangecoder_t *coder, uint8_t *output, int capac
         coder->contexts[i] = 0x8000;
     }
     
-    // Initialize output buffer
-    //memset(output, 0, capacity);
-    
     // Ensure first byte is initialized
     output[0] = 0;
 }
@@ -200,8 +197,8 @@ static void add_bit(shr_rangecoder_t *coder) {
         }
         
         // Initialize byte to 0 if not already done
-        if (bytepos >= (int)coder->output_size) {
-            coder->output[bytepos] = 0;
+        while (bytepos >= (int)coder->output_size) {
+            coder->output[coder->output_size++] = 0;
         }
         
         coder->output[bytepos] ^= bitmask;
@@ -209,12 +206,6 @@ static void add_bit(shr_rangecoder_t *coder) {
         // tracef("    ADD_BIT: pos=%d bytepos=%d bitmask=0x%02x old_byte=0x%02x new_byte=0x%02x\n", 
         //        pos, bytepos, bitmask, old_byte, new_byte);
     } while ((coder->output[bytepos] & bitmask) == 0);
-    
-    // Update maximum output size
-    if (bytepos + 1 > (int)coder->output_size) {
-        coder->output_size = bytepos + 1;
-        // tracef("    ADD_BIT: updated output_size=%d\n", coder->output_size);
-    }
 }
 
 // Exact copy of original rangecoder_code function
@@ -333,8 +324,8 @@ static void range_coder_finish(shr_rangecoder_t *coder) {
     }
     
     int required_bytes = ((coder->dest_bit - 1) >> 3) + 1;
-    if (required_bytes > (int)coder->output_size) {
-        coder->output_size = required_bytes;
+    while (required_bytes > (int)coder->output_size) {
+        coder->output[coder->output_size++] = 0;
     }
     
     // Trace the finish end

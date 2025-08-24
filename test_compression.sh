@@ -50,6 +50,9 @@ C_EXECUTABLE="CShrinkler"
 CPP_EXECUTABLE="Shrinkler"
 MINI_EXECUTABLE="minishrinkler"
 
+# Options
+WINDOW_KB=5
+
 # Global statistics
 TOTAL_FILES=0
 PASSED_FILES=0
@@ -59,6 +62,7 @@ TOTAL_CPP_SIZE=0
 TOTAL_C_SIZE=0
 TOTAL_MINI_SIZE=0
 TOTAL_GZIP_SIZE=0
+TOTAL_LZ4_SIZE=0
 
 # Directory statistics (using simple variables)
 NOTES_FILES=0
@@ -66,12 +70,14 @@ NOTES_ORIGINAL_SIZE=0
 NOTES_CPP_SIZE=0
 NOTES_MINI_SIZE=0
 NOTES_GZIP_SIZE=0
+NOTES_LZ4_SIZE=0
 
 SPRITES_FILES=0
 SPRITES_ORIGINAL_SIZE=0
 SPRITES_CPP_SIZE=0
 SPRITES_MINI_SIZE=0
 SPRITES_GZIP_SIZE=0
+SPRITES_LZ4_SIZE=0
 
 # Function to clean temporary files
 cleanup() {
@@ -105,16 +111,30 @@ print_final_report() {
         local cpp_weighted_ratio=$(echo "scale=2; $TOTAL_CPP_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
         local mini_weighted_ratio=$(echo "scale=2; $TOTAL_MINI_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
         local gzip_weighted_ratio=$(echo "scale=2; $TOTAL_GZIP_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+        local lz4_weighted_ratio="N/A"
+        if [ "$LZ4C_AVAILABLE" = "true" ]; then
+            lz4_weighted_ratio=$(echo "scale=2; $TOTAL_LZ4_SIZE * 100 / $TOTAL_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+        fi
         
-        printf "%-20s %10s %8s %8s %8s\n" "Directory" "Files" "Shrinkler" "Mini" "Gzip"
-        printf "%-20s %10s %8s %8s %8s\n" "--------------------" "----------" "--------" "--------" "--------"
+        if [ "$LZ4C_AVAILABLE" = "true" ]; then
+            printf "%-20s %10s %8s %8s %8s %8s\n" "Directory" "Files" "Shrinkler" "Mini" "Gzip" "LZ4"
+            printf "%-20s %10s %8s %8s %8s %8s\n" "--------------------" "----------" "--------" "--------" "--------" "--------"
+        else
+            printf "%-20s %10s %8s %8s %8s\n" "Directory" "Files" "Shrinkler" "Mini" "Gzip"
+            printf "%-20s %10s %8s %8s %8s\n" "--------------------" "----------" "--------" "--------" "--------"
+        fi
         
         # Print notes directory stats
         if [ $NOTES_ORIGINAL_SIZE -gt 0 ]; then
             local notes_cpp_ratio=$(echo "scale=1; $NOTES_CPP_SIZE * 100 / $NOTES_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
             local notes_mini_ratio=$(echo "scale=1; $NOTES_MINI_SIZE * 100 / $NOTES_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
             local notes_gzip_ratio=$(echo "scale=1; $NOTES_GZIP_SIZE * 100 / $NOTES_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
-            printf "%-20s %10s %8s %8s %8s\n" "notes" "$NOTES_FILES" "${notes_cpp_ratio}%" "${notes_mini_ratio}%" "${notes_gzip_ratio}%"
+            if [ "$LZ4C_AVAILABLE" = "true" ]; then
+                local notes_lz4_ratio=$(echo "scale=1; $NOTES_LZ4_SIZE * 100 / $NOTES_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+                printf "%-20s %10s %8s %8s %8s %8s\n" "notes" "$NOTES_FILES" "${notes_cpp_ratio}%" "${notes_mini_ratio}%" "${notes_gzip_ratio}%" "${notes_lz4_ratio}%"
+            else
+                printf "%-20s %10s %8s %8s %8s\n" "notes" "$NOTES_FILES" "${notes_cpp_ratio}%" "${notes_mini_ratio}%" "${notes_gzip_ratio}%"
+            fi
         fi
         
         # Print sprites directory stats
@@ -122,11 +142,21 @@ print_final_report() {
             local sprites_cpp_ratio=$(echo "scale=1; $SPRITES_CPP_SIZE * 100 / $SPRITES_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
             local sprites_mini_ratio=$(echo "scale=1; $SPRITES_MINI_SIZE * 100 / $SPRITES_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
             local sprites_gzip_ratio=$(echo "scale=1; $SPRITES_GZIP_SIZE * 100 / $SPRITES_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
-            printf "%-20s %10s %8s %8s %8s\n" "sprites" "$SPRITES_FILES" "${sprites_cpp_ratio}%" "${sprites_mini_ratio}%" "${sprites_gzip_ratio}%"
+            if [ "$LZ4C_AVAILABLE" = "true" ]; then
+                local sprites_lz4_ratio=$(echo "scale=1; $SPRITES_LZ4_SIZE * 100 / $SPRITES_ORIGINAL_SIZE" | bc -l 2>/dev/null || echo "N/A")
+                printf "%-20s %10s %8s %8s %8s %8s\n" "sprites" "$SPRITES_FILES" "${sprites_cpp_ratio}%" "${sprites_mini_ratio}%" "${sprites_gzip_ratio}%" "${sprites_lz4_ratio}%"
+            else
+                printf "%-20s %10s %8s %8s %8s\n" "sprites" "$SPRITES_FILES" "${sprites_cpp_ratio}%" "${sprites_mini_ratio}%" "${sprites_gzip_ratio}%"
+            fi
         fi
         
-        printf "%-20s %10s %8s %8s %8s\n" "--------------------" "----------" "--------" "--------" "--------"
-        printf "%-20s %10s %8s %8s %8s\n" "WEIGHTED AVERAGE" "$TOTAL_FILES" "${cpp_weighted_ratio}%" "${mini_weighted_ratio}%" "${gzip_weighted_ratio}%"
+        if [ "$LZ4C_AVAILABLE" = "true" ]; then
+            printf "%-20s %10s %8s %8s %8s %8s\n" "--------------------" "----------" "--------" "--------" "--------" "--------"
+            printf "%-20s %10s %8s %8s %8s %8s\n" "WEIGHTED AVERAGE" "$TOTAL_FILES" "${cpp_weighted_ratio}%" "${mini_weighted_ratio}%" "${gzip_weighted_ratio}%" "${lz4_weighted_ratio}%"
+        else
+            printf "%-20s %10s %8s %8s %8s\n" "--------------------" "----------" "--------" "--------" "--------"
+            printf "%-20s %10s %8s %8s %8s\n" "WEIGHTED AVERAGE" "$TOTAL_FILES" "${cpp_weighted_ratio}%" "${mini_weighted_ratio}%" "${gzip_weighted_ratio}%"
+        fi
         
         echo
         log_info "Performance comparison (weighted average):"
@@ -149,6 +179,16 @@ print_final_report() {
                 log_warning "⚠ Minishrinkler is ${diff}% worse than Gzip"
             fi
         fi
+        
+        if [ "$LZ4C_AVAILABLE" = "true" ] && [ "$mini_weighted_ratio" != "N/A" ] && [ "$lz4_weighted_ratio" != "N/A" ]; then
+            if (( $(echo "$mini_weighted_ratio < $lz4_weighted_ratio" | bc -l) )); then
+                local diff=$(echo "scale=2; $lz4_weighted_ratio - $mini_weighted_ratio" | bc -l)
+                log_success "✓ Minishrinkler beats LZ4 by ${diff}%"
+            else
+                local diff=$(echo "scale=2; $mini_weighted_ratio - $lz4_weighted_ratio" | bc -l)
+                log_warning "⚠ Minishrinkler is ${diff}% worse than LZ4"
+            fi
+        fi
     fi
     
     if [ $FAILED_FILES -gt 0 ]; then
@@ -156,6 +196,17 @@ print_final_report() {
     else
         log_success "All tests passed!"
         exit 0
+    fi
+}
+
+# Function to check if lz4c is available
+check_lz4c() {
+    if command -v lz4c >/dev/null 2>&1; then
+        LZ4C_AVAILABLE=true
+        log_info "lz4c found in PATH"
+    else
+        LZ4C_AVAILABLE=false
+        log_warning "lz4c not found in PATH - skipping lz4c compression"
     fi
 }
 
@@ -275,7 +326,7 @@ test_file() {
     
     # Compress with Minishrinkler
     local mini_output="$OUTPUT_DIR/${filename}.mini.shr"
-    if ! "$MINI_DIR/$MINI_EXECUTABLE" "$input_file" "$mini_output" >/dev/null 2>&1; then
+    if ! "$MINI_DIR/$MINI_EXECUTABLE" --window "$WINDOW_KB" "$input_file" "$mini_output" >/dev/null 2>&1; then
         printf "%-50s %s\n" "$filename" "FAILED (Mini compression)"
         return 1
     fi
@@ -288,6 +339,17 @@ test_file() {
         return 1
     fi
     local gzip_size=$(wc -c < "$gzip_output")
+    
+    # Compress with lz4c (if available)
+    local lz4_size=0
+    if [ "$LZ4C_AVAILABLE" = "true" ]; then
+        local lz4_output="$OUTPUT_DIR/${filename}.lz4"
+        if ! lz4c -9 "$input_file" "$lz4_output" >/dev/null 2>&1; then
+            printf "%-50s %s\n" "$filename" "FAILED (lz4c compression)"
+            return 1
+        fi
+        lz4_size=$(wc -c < "$lz4_output")
+    fi
     
     # Test decompression for all versions
     local decompression_ok=true
@@ -313,9 +375,17 @@ test_file() {
     local cpp_ratio=$(calculate_ratio "$original_size" "$cpp_size")
     local mini_ratio=$(calculate_ratio "$original_size" "$mini_size")
     local gzip_ratio=$(calculate_ratio "$original_size" "$gzip_size")
+    local lz4_ratio=0
+    if [ "$LZ4C_AVAILABLE" = "true" ]; then
+        lz4_ratio=$(calculate_ratio "$original_size" "$lz4_size")
+    fi
     
     # Print result
-    printf "%-50s %8s %8s %8s %8s\n" "$filename" "${cpp_ratio}%" "${mini_ratio}%" "${gzip_ratio}%" "PASS"
+    if [ "$LZ4C_AVAILABLE" = "true" ]; then
+        printf "%-50s %8s %8s %8s %8s %8s\n" "$filename" "${cpp_ratio}%" "${mini_ratio}%" "${gzip_ratio}%" "${lz4_ratio}%" "PASS"
+    else
+        printf "%-50s %8s %8s %8s %8s\n" "$filename" "${cpp_ratio}%" "${mini_ratio}%" "${gzip_ratio}%" "PASS"
+    fi
     
     # Update directory statistics
     if [ "$dir_name" = "notes" ]; then
@@ -324,12 +394,18 @@ test_file() {
         NOTES_CPP_SIZE=$((NOTES_CPP_SIZE + cpp_size))
         NOTES_MINI_SIZE=$((NOTES_MINI_SIZE + mini_size))
         NOTES_GZIP_SIZE=$((NOTES_GZIP_SIZE + gzip_size))
+        if [ "$LZ4C_AVAILABLE" = "true" ]; then
+            NOTES_LZ4_SIZE=$((NOTES_LZ4_SIZE + lz4_size))
+        fi
     elif [ "$dir_name" = "sprites" ]; then
         SPRITES_FILES=$((SPRITES_FILES + 1))
         SPRITES_ORIGINAL_SIZE=$((SPRITES_ORIGINAL_SIZE + original_size))
         SPRITES_CPP_SIZE=$((SPRITES_CPP_SIZE + cpp_size))
         SPRITES_MINI_SIZE=$((SPRITES_MINI_SIZE + mini_size))
         SPRITES_GZIP_SIZE=$((SPRITES_GZIP_SIZE + gzip_size))
+        if [ "$LZ4C_AVAILABLE" = "true" ]; then
+            SPRITES_LZ4_SIZE=$((SPRITES_LZ4_SIZE + lz4_size))
+        fi
     fi
     
     # Update global statistics
@@ -339,6 +415,9 @@ test_file() {
     TOTAL_CPP_SIZE=$((TOTAL_CPP_SIZE + cpp_size))
     TOTAL_MINI_SIZE=$((TOTAL_MINI_SIZE + mini_size))
     TOTAL_GZIP_SIZE=$((TOTAL_GZIP_SIZE + gzip_size))
+    if [ "$LZ4C_AVAILABLE" = "true" ]; then
+        TOTAL_LZ4_SIZE=$((TOTAL_LZ4_SIZE + lz4_size))
+    fi
     
     if [ "$TEST_C_VERSION" = "true" ]; then
         TOTAL_C_SIZE=$((TOTAL_C_SIZE + c_size))
@@ -353,8 +432,13 @@ test_directory() {
     local dir_name=$(basename "$dir_path")
     
     log_info "Testing directory: $dir_name"
-    printf "%-50s %8s %8s %8s %8s\n" "Filename" "Shrinkler" "Mini" "Gzip" "Status"
-    printf "%-50s %8s %8s %8s %8s\n" "--------------------------------------------------" "--------" "--------" "--------" "--------"
+    if [ "$LZ4C_AVAILABLE" = "true" ]; then
+        printf "%-50s %8s %8s %8s %8s %8s\n" "Filename" "Shrinkler" "Mini" "Gzip" "LZ4" "Status"
+        printf "%-50s %8s %8s %8s %8s %8s\n" "--------------------------------------------------" "--------" "--------" "--------" "--------" "--------"
+    else
+        printf "%-50s %8s %8s %8s %8s\n" "Filename" "Shrinkler" "Mini" "Gzip" "Status"
+        printf "%-50s %8s %8s %8s %8s\n" "--------------------------------------------------" "--------" "--------" "--------" "--------"
+    fi
     
     local dir_passed=0
     local dir_total=0
@@ -394,7 +478,18 @@ test_directory() {
             local mini_ratio=$(echo "scale=1; $mini_size * 100 / $original_size" | bc -l 2>/dev/null || echo "N/A")
             local gzip_ratio=$(echo "scale=1; $gzip_size * 100 / $original_size" | bc -l 2>/dev/null || echo "N/A")
             
-            printf "%-50s %8s %8s %8s %8s\n" "--- $dir_name summary ---" "${cpp_ratio}%" "${mini_ratio}%" "${gzip_ratio}%" "$dir_passed/$dir_total"
+            if [ "$LZ4C_AVAILABLE" = "true" ]; then
+                local lz4_size=0
+                if [ "$dir_name" = "notes" ]; then
+                    lz4_size=$NOTES_LZ4_SIZE
+                elif [ "$dir_name" = "sprites" ]; then
+                    lz4_size=$SPRITES_LZ4_SIZE
+                fi
+                local lz4_ratio=$(echo "scale=1; $lz4_size * 100 / $original_size" | bc -l 2>/dev/null || echo "N/A")
+                printf "%-50s %8s %8s %8s %8s %8s\n" "--- $dir_name summary ---" "${cpp_ratio}%" "${mini_ratio}%" "${gzip_ratio}%" "${lz4_ratio}%" "$dir_passed/$dir_total"
+            else
+                printf "%-50s %8s %8s %8s %8s\n" "--- $dir_name summary ---" "${cpp_ratio}%" "${mini_ratio}%" "${gzip_ratio}%" "$dir_passed/$dir_total"
+            fi
             echo
         fi
     fi
@@ -402,6 +497,23 @@ test_directory() {
 
 # Main function
 main() {
+    # Parse optional args
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --window)
+                if [[ -n "$2" && "$2" =~ ^[0-9]+$ ]]; then
+                    WINDOW_KB="$2"
+                    shift 2
+                else
+                    log_error "--window requires a numeric size in KB"
+                    exit 1
+                fi
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
     log_info "=== Shrinkler Compressor Compatibility Test ==="
     if [ "$TEST_C_VERSION" = "true" ]; then
         log_info "Testing: C++ vs C vs Minishrinkler + Decompression verification"
@@ -414,12 +526,16 @@ main() {
     compile_versions
     echo
     
+    # Check if lz4c is available
+    check_lz4c
+    echo
+    
     # Check testsuite
     check_testsuite
     echo
     
     # Run tests for each subdirectory
-    log_info "Running compatibility tests..."
+    log_info "Running compatibility tests (Mini window: ${WINDOW_KB} KB)..."
     echo
     
     for subdir in "$TEST_DIR"/*/; do

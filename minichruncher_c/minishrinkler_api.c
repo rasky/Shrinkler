@@ -14,12 +14,24 @@
 #include <string.h>
 #include <assert.h>
 #include <math.h>
+#include <stdarg.h>
 
 // Compile-time trace control
-#define TRACE_SHRINKLER 0
+#define TRACE_SHRINKLER 1
 
 #if TRACE_SHRINKLER
-#define tracef(fmt, ...) fprintf(stderr, fmt, ##__VA_ARGS__)
+static void tracef(const char *fmt, ...) {
+    static FILE *trace_file = NULL;
+    if (!trace_file) {
+        trace_file = fopen("minishrinkler.log", "w");
+    }
+    if (trace_file) {
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(trace_file, fmt, args);
+        va_end(args);
+    }
+}
 #else
 #define tracef(fmt, ...) ((void)0)
 #endif
@@ -59,7 +71,7 @@ typedef struct {
     uint8_t *output;
     uint16_t output_size;    
     uint16_t output_capacity;
-    int16_t dest_bit;        
+    int32_t dest_bit;        
     uint32_t intervalsize;
     uint32_t intervalmin;
 } shr_rangecoder_t;
@@ -134,12 +146,15 @@ static void update_hash(shr_work_buffer_t *mem, const unsigned char *data, int p
         }
     }
     
-    // Update hash table with new entry (moving window of HASH_WINDOW_SIZE)
+    // Update hash table with new entry (wrapping window)
     mem->hash_table[hash].next = mem->hash_table[hash].pos;
-    // Store relative position within HASH_WINDOW_SIZE window
+    // Store position with wrapping
     mem->hash_table[hash].pos = pos & HASH_WINDOW_MASK;
-    mem->hash_table[hash].quality = quality;  
+    mem->hash_table[hash].quality = quality;
     mem->hash_table[hash].match_len = 0; // Will be calculated during match finding
+    
+    tracef("UPDATE_HASH: pos=%d, hash=%d, stored_pos=%d (wrapped)\n",
+        pos, hash, mem->hash_table[hash].pos);
 }
 
 // Exact copy of original RangeCoder logic (adapted for static allocation)
@@ -172,8 +187,7 @@ static void add_bit(shr_rangecoder_t *coder) {
     int bytepos;
     int bitmask;
     
-    tracef("    ADD_BIT: start pos=%d\n", pos);
-    
+    // tracef("    ADD_BIT: start pos=%d\n", pos);
     do {
         pos--;
         if (pos < 0) return;
@@ -194,14 +208,14 @@ static void add_bit(shr_rangecoder_t *coder) {
         coder->output[bytepos] ^= bitmask;
         uint8_t new_byte = coder->output[bytepos];
         
-        tracef("    ADD_BIT: pos=%d bytepos=%d bitmask=0x%02x old_byte=0x%02x new_byte=0x%02x\n", 
-               pos, bytepos, bitmask, old_byte, new_byte);
+        // tracef("    ADD_BIT: pos=%d bytepos=%d bitmask=0x%02x old_byte=0x%02x new_byte=0x%02x\n", 
+        //        pos, bytepos, bitmask, old_byte, new_byte);
     } while ((coder->output[bytepos] & bitmask) == 0);
     
     // Update maximum output size
     if (bytepos + 1 > coder->output_size) {
         coder->output_size = bytepos + 1;
-        tracef("    ADD_BIT: updated output_size=%d\n", coder->output_size);
+        // tracef("    ADD_BIT: updated output_size=%d\n", coder->output_size);
     }
 }
 
@@ -224,7 +238,7 @@ static int range_coder_code(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int
     }
     
     // Trace the input state
-    range_coder_trace_state(coder, "CODE_START", context_index, bit, size_before);
+    // range_coder_trace_state(coder, "CODE_START", context_index, bit, size_before);
     
     unsigned prob = coder->contexts[context_index];
     unsigned threshold = (coder->intervalsize * prob) >> 16;
@@ -276,39 +290,39 @@ static int range_coder_code(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int
     int size_diff = size_after - size_before;
     
     // Trace the output state
-    range_coder_trace_state(coder, "CODE_END", context_index, bit, size_diff);
+    // range_coder_trace_state(coder, "CODE_END", context_index, bit, size_diff);
     
     return size_diff;
 }
 
 static void range_coder_trace_state(shr_rangecoder_t *coder, const char *operation, int context, int bit, int size) {
-    tracef("RANGECODER: %s context=%d bit=%d size=%d intervalmin=0x%04x intervalsize=0x%04x dest_bit=%d\n",
-           operation, context, bit, size, coder->intervalmin, coder->intervalsize, coder->dest_bit);
+    // tracef("RANGECODER: %s context=%d bit=%d size=%d intervalmin=0x%04x intervalsize=0x%04x dest_bit=%d\n",
+    //        operation, context, bit, size, coder->intervalmin, coder->intervalsize, coder->dest_bit);
 }
 
 // Exact copy of original rangecoder_finish function
 static void range_coder_finish(shr_rangecoder_t *coder) {
     // Trace the finish start
-    tracef("RANGECODER: FINISH_START intervalmin=0x%04x intervalsize=0x%04x dest_bit=%d\n",
-           coder->intervalmin, coder->intervalsize, coder->dest_bit);
+    // tracef("RANGECODER: FINISH_START intervalmin=0x%04x intervalsize=0x%04x dest_bit=%d\n",
+    //        coder->intervalmin, coder->intervalsize, coder->dest_bit);
     
     int intervalmax = coder->intervalmin + coder->intervalsize;
     int final_min = 0;
     int final_size = 0x10000;
     
-    tracef("RANGECODER: FINISH_DETAILED_START intervalmin=0x%04x intervalsize=0x%04x dest_bit=%d intervalmax=0x%04x\n",
-           coder->intervalmin, coder->intervalsize, coder->dest_bit, intervalmax);
+    // tracef("RANGECODER: FINISH_DETAILED_START intervalmin=0x%04x intervalsize=0x%04x dest_bit=%d intervalmax=0x%04x\n",
+    //        coder->intervalmin, coder->intervalsize, coder->dest_bit, intervalmax);
     
     int finish_iterations = 0;
     while (final_min < coder->intervalmin || final_min + final_size >= intervalmax) {
         if (final_min + final_size < intervalmax) {
-            tracef("RANGECODER: FINISH_ITERATION %d: final_min=0x%04x final_size=0x%04x < intervalmax=0x%04x -> add_bit\n",
-                   finish_iterations, final_min, final_size, intervalmax);
+            // tracef("RANGECODER: FINISH_ITERATION %d: final_min=0x%04x final_size=0x%04x < intervalmax=0x%04x -> add_bit\n",
+            //        finish_iterations, final_min, final_size, intervalmax);
             add_bit(coder);
             final_min += final_size;
         } else {
-            tracef("RANGECODER: FINISH_ITERATION %d: final_min=0x%04x final_size=0x%04x >= intervalmax=0x%04x -> no add_bit\n",
-                   finish_iterations, final_min, final_size, intervalmax);
+            // tracef("RANGECODER: FINISH_ITERATION %d: final_min=0x%04x final_size=0x%04x >= intervalmax=0x%04x -> no add_bit\n",
+            //        finish_iterations, final_min, final_size, intervalmax);
         }
         coder->dest_bit++;
         final_size >>= 1;
@@ -321,8 +335,8 @@ static void range_coder_finish(shr_rangecoder_t *coder) {
     }
     
     // Trace the finish end
-    tracef("RANGECODER: FINISH_END final dest_bit=%d out_size=%d required_bytes=%d\n",
-           coder->dest_bit, coder->output_size, required_bytes);
+    // tracef("RANGECODER: FINISH_END final dest_bit=%d out_size=%d required_bytes=%d\n",
+    //        coder->dest_bit, coder->output_size, required_bytes);
 }
 
 // LZ Encoder
@@ -476,20 +490,21 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
     int best_quality = 0;
     
     while (candidate_pos > 0 && matches_checked < max_matches) {
-        // Convert relative position to absolute position within HASH_WINDOW_SIZE moving window
-        int window_base = (pos >> HASH_WINDOW_BITS) << HASH_WINDOW_BITS;  // Start of current HASH_WINDOW_SIZE window
-        int absolute_candidate_pos = window_base + candidate_pos;
+        // Simple wrapping: try to reconstruct absolute position from wrapped position
+        // We'll validate the match later, so it's ok if we get it wrong initially
+        int absolute_candidate_pos = candidate_pos;
         
-        // Skip if position is in the future or too far back
-        if (absolute_candidate_pos >= pos || (pos - absolute_candidate_pos) > HASH_WINDOW_MASK) {
+        // Always use absolute positions (for debugging)
+        absolute_candidate_pos = candidate_pos;
+        
+        // Skip if position is invalid (negative or too far back)
+        if (absolute_candidate_pos < 0 || (pos - absolute_candidate_pos) > HASH_WINDOW_MASK) {
             candidate_pos = mem->hash_table[hash].next;
             matches_checked++;
             continue;
         }
         
-        int offset = pos - absolute_candidate_pos;
-        
-        if (offset > max_offset) break;
+        if ((pos - absolute_candidate_pos) > max_offset) break;
         
         // Use cached match length if available and recent
         int match_len = 0;
@@ -499,7 +514,46 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
             match_len = mem->hash_table[hash].match_len;
         }
         
-        // Check if we have a match
+        // Validate that this is actually a match (not a wrapping false positive)
+        // First check if at least MIN_MATCH_LENGTH bytes match
+        int valid_match = 1;
+        if (absolute_candidate_pos + MIN_MATCH_LENGTH > data_size) {
+            valid_match = 0;  // Can't read enough bytes
+            tracef("  WRAP_DEBUG: invalid match - can't read enough bytes\n");
+        } else {
+            for (int i = 0; i < MIN_MATCH_LENGTH; i++) {
+                if (pos + i >= data_size || data[pos + i] != data[absolute_candidate_pos + i]) {
+                    valid_match = 0;
+                    tracef("  WRAP_DEBUG: invalid match - byte %d differs: pos[%d]=%02x vs candidate[%d]=%02x\n", 
+                           i, pos + i, data[pos + i], absolute_candidate_pos + i, data[absolute_candidate_pos + i]);
+                    break;
+                }
+            }
+        }
+        
+        // Skip if this is a false positive from wrapping
+        if (!valid_match) {
+            candidate_pos = mem->hash_table[hash].next;
+            matches_checked++;
+            continue;
+        }
+        
+        int offset = pos - absolute_candidate_pos;
+        
+        // Assert that absolute_candidate_pos is not greater than pos
+        assert(pos >= absolute_candidate_pos);
+        
+        // Skip self-matches (offset 0)
+        if (offset == 0) {
+            candidate_pos = mem->hash_table[hash].next;
+            matches_checked++;
+            continue;
+        }
+        
+        // Assert that we never have offset 0
+        assert(offset > 0);
+        
+        // Check if we have a match (now we know it's valid)
         while (match_len < max_len && 
                pos + match_len < data_size && 
                absolute_candidate_pos + match_len < data_size &&

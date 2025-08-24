@@ -536,7 +536,7 @@ int main(int argc, char *argv[]) {
         }
     } else {
         // Write to stdout
-        if (fwrite(dst_data, 1, dec_size, stdout) != dec_size) {
+        if (fwrite(dst_data, 1, (size_t)dec_size, stdout) != (size_t)dec_size) {
             fprintf(stderr, "Error: Cannot write to stdout\n");
             success = false;
         } else {

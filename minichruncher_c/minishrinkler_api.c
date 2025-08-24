@@ -180,8 +180,10 @@ static void range_coder_init(shr_rangecoder_t *coder, uint8_t *output, int capac
     output[0] = 0;
 }
 
-// Forward declaration for tracing
+// Forward declaration for tracing (only when tracing is enabled)
+#if TRACE_SHRINKLER
 static void range_coder_trace_state(shr_rangecoder_t *coder, const char *operation, int context, int bit, int size);
+#endif
 
 // Exact copy of original add_bit function (adapted for static allocation)
 static void add_bit(shr_rangecoder_t *coder) {
@@ -196,26 +198,24 @@ static void add_bit(shr_rangecoder_t *coder) {
         bytepos = pos >> 3;
         bitmask = 0x80 >> (pos & 7);
         
-        if (bytepos >= coder->output_capacity) {
+        if (bytepos >= (int)coder->output_capacity) {
             fprintf(stderr, "Output buffer overflow: bytepos=%d, output_capacity=%d\n", bytepos, coder->output_capacity);
             exit(1);
         }
         
         // Initialize byte to 0 if not already done
-        if (bytepos >= coder->output_size) {
+        if (bytepos >= (int)coder->output_size) {
             coder->output[bytepos] = 0;
         }
         
-        uint8_t old_byte = coder->output[bytepos];
         coder->output[bytepos] ^= bitmask;
-        uint8_t new_byte = coder->output[bytepos];
         
         // tracef("    ADD_BIT: pos=%d bytepos=%d bitmask=0x%02x old_byte=0x%02x new_byte=0x%02x\n", 
         //        pos, bytepos, bitmask, old_byte, new_byte);
     } while ((coder->output[bytepos] & bitmask) == 0);
     
     // Update maximum output size
-    if (bytepos + 1 > coder->output_size) {
+    if (bytepos + 1 > (int)coder->output_size) {
         coder->output_size = bytepos + 1;
         // tracef("    ADD_BIT: updated output_size=%d\n", coder->output_size);
     }
@@ -297,10 +297,17 @@ static int range_coder_code(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int
     return size_diff;
 }
 
+#if TRACE_SHRINKLER
 static void range_coder_trace_state(shr_rangecoder_t *coder, const char *operation, int context, int bit, int size) {
+    (void)coder;      // Suppress unused parameter warning
+    (void)operation;  // Suppress unused parameter warning
+    (void)context;    // Suppress unused parameter warning
+    (void)bit;        // Suppress unused parameter warning
+    (void)size;       // Suppress unused parameter warning
     // tracef("RANGECODER: %s context=%d bit=%d size=%d intervalmin=0x%04x intervalsize=0x%04x dest_bit=%d\n",
     //        operation, context, bit, size, coder->intervalmin, coder->intervalsize, coder->dest_bit);
 }
+#endif
 
 // Exact copy of original rangecoder_finish function
 static void range_coder_finish(shr_rangecoder_t *coder) {
@@ -315,8 +322,7 @@ static void range_coder_finish(shr_rangecoder_t *coder) {
     // tracef("RANGECODER: FINISH_DETAILED_START intervalmin=0x%04x intervalsize=0x%04x dest_bit=%d intervalmax=0x%04x\n",
     //        coder->intervalmin, coder->intervalsize, coder->dest_bit, intervalmax);
     
-    int finish_iterations = 0;
-    while (final_min < coder->intervalmin || final_min + final_size >= intervalmax) {
+    while (final_min < (int)coder->intervalmin || final_min + final_size >= intervalmax) {
         if (final_min + final_size < intervalmax) {
             // tracef("RANGECODER: FINISH_ITERATION %d: final_min=0x%04x final_size=0x%04x < intervalmax=0x%04x -> add_bit\n",
             //        finish_iterations, final_min, final_size, intervalmax);
@@ -328,11 +334,10 @@ static void range_coder_finish(shr_rangecoder_t *coder) {
         }
         coder->dest_bit++;
         final_size >>= 1;
-        finish_iterations++;
     }
     
     int required_bytes = ((coder->dest_bit - 1) >> 3) + 1;
-    if (required_bytes > coder->output_size) {
+    if (required_bytes > (int)coder->output_size) {
         coder->output_size = required_bytes;
     }
     

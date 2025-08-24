@@ -163,11 +163,7 @@ int rangecoder_code(RangeCoder *coder, int context_index, int bit) {
 	return size_diff;
 }
 
-// Set the function pointer after the function is defined
-static void set_function_pointers() {
-	// This is a workaround for the circular dependency
-	// In a real implementation, we'd handle this differently
-}
+// Function pointer setup is handled inline where needed
 
 void rangecoder_reset(RangeCoder *coder) {
 	for (int i = 0; i < 1024; i++) {

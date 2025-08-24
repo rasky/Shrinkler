@@ -61,10 +61,10 @@ static void tracef(const char *fmt, ...) {
 // Hash table configuration
 #define HASH_SIZE 921  // 4608 bytes / 5 bytes per entry
 
-// Moving window configuration (14-bit = 16KB window)
-#define HASH_WINDOW_BITS 14
-#define HASH_WINDOW_SIZE (1 << HASH_WINDOW_BITS)  // 16384
-#define HASH_WINDOW_MASK (HASH_WINDOW_SIZE - 1)   // 0x3FFF
+// Moving window configuration (16-bit = 64KB window)
+#define HASH_WINDOW_BITS 16
+#define HASH_WINDOW_SIZE (1 << HASH_WINDOW_BITS)  // 65536
+#define HASH_WINDOW_MASK (HASH_WINDOW_SIZE - 1)   // 0xFFFF
 
 // Data structures - Embedded optimized
 typedef struct {
@@ -85,11 +85,11 @@ typedef struct {
 } shr_lzstate_t;
 
 typedef struct {
-    uint32_t pos : HASH_WINDOW_BITS;      // HASH_WINDOW_BITS position (HASH_WINDOW_SIZE max)
-    uint32_t next : HASH_WINDOW_BITS;     // HASH_WINDOW_BITS next pointer
-    uint32_t match_len : 6;               // 6-bit cached match length (0-63, covers most useful matches)  
-    uint32_t quality : 6;                 // 6-bit quality indicator (0-63, good granularity)
-    // Total: 40 bits = 5 bytes exactly!
+    uint16_t pos;                         // 16-bit position (65535 max)
+    uint16_t next;                        // 16-bit next pointer
+    uint32_t match_len : 10;              // 10-bit cached match length (0-1023)
+    uint32_t quality : 6;                 // 6-bit quality indicator (0-63)
+    // Total: 48 bits = 6 bytes exactly!
 } __attribute__((packed)) shr_hash_entry_t;
 
 // Embedded memory optimization: no static allocations
@@ -493,12 +493,16 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
     int best_quality = 0;
     
     while (candidate_pos > 0 && matches_checked < max_matches) {
-        // Simple wrapping: try to reconstruct absolute position from wrapped position
-        // We'll validate the match later, so it's ok if we get it wrong initially
+        // Wrapping window logic: reconstruct absolute position from wrapped position
         int absolute_candidate_pos = candidate_pos;
         
-        // Always use absolute positions (for debugging)
-        absolute_candidate_pos = candidate_pos;
+        // Handle wrapping: if candidate_pos is greater than current pos, it's from a previous window
+        if (absolute_candidate_pos > pos) {
+            // This position is from a previous window, skip it
+            candidate_pos = mem->hash_table[hash].next;
+            matches_checked++;
+            continue;
+        }
         
         // Skip if position is invalid (negative or too far back)
         if (absolute_candidate_pos < 0 || (pos - absolute_candidate_pos) > HASH_WINDOW_MASK) {
@@ -566,7 +570,7 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
         
         // Update cached match length (with overflow protection)
         if (candidate_pos == mem->hash_table[hash].pos) {
-            mem->hash_table[hash].match_len = (match_len > 63) ? 63 : match_len;  // 6-bit max = 63
+            mem->hash_table[hash].match_len = (match_len > 1023) ? 1023 : match_len;  // 10-bit max = 1023
         }
         
         // Calculate match quality score with encoding cost consideration (6-bit scale)

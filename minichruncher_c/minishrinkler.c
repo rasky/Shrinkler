@@ -97,7 +97,8 @@ typedef struct {
     shr_lzstate_t state;
 
     // Match finder configuration derived from work memory
-    int hash_size;          // number of buckets
+    int hash_size;          // number of buckets (power of two)
+    int hash_mask;          // hash_size - 1
     int ways;               // associativity (entries per bucket)
     int window_bits;        // such that window_size == (1 << window_bits)
     int window_size;        // sliding window size (<= 65536)
@@ -121,16 +122,27 @@ static void init_size_table(shr_work_buffer_t *mem) {
 #endif
 
 // Improved hash function for 3-byte sequences
-static unsigned int hash3(const unsigned char *data, int hash_size) {
-    // Better distribution than simple bit shifting
-    return ((data[0] * 31 + data[1]) * 31 + data[2]) % hash_size;
+static unsigned int hash3(const unsigned char *data) {
+    // Mix into 32-bit and rely on power-of-two mask for index
+    unsigned int v = (unsigned int)data[0] | ((unsigned int)data[1] << 8) | ((unsigned int)data[2] << 16);
+    v *= 0x9E3779B1u; // golden ratio multiplier
+    v ^= v >> 16;
+    return v;
+}
+
+// Approximate cost of encode_number as used by the coder: number >= 2
+static int estimate_number_cost_int(int number) {
+    int i = 0;
+    while ((4 << i) <= number) i++;
+    // continuation bits (i), stop bit (1), payload bits (i+1)
+    return i + 1 + (i + 1);
 }
 
 // Update hash table with new position (set-associative, round-robin replacement)
 static void update_hash(shr_work_buffer_t *mem, const unsigned char *data, int pos, int data_size) {
     if (pos + 2 >= data_size) return;
     
-    unsigned int hash = hash3(&data[pos], mem->hash_size);
+    unsigned int hash = hash3(&data[pos]) & (unsigned int)mem->hash_mask;
 
     // Round-robin replacement within the bucket
     int way = mem->repl_index[hash] % mem->ways;
@@ -464,12 +476,16 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
     int max_offset = min(pos, min(MAX_OFFSET, window_limit));
     
     // Use hash table to find potential matches
-    unsigned int hash = hash3(&data[pos], mem->hash_size);
+    unsigned int hash = hash3(&data[pos]) & (unsigned int)mem->hash_mask;
 
     int best_quality = 0;
 
-    // Iterate all ways in the bucket
-    for (int w = 0; w < mem->ways; w++) {
+    // Iterate all ways in the bucket in MRU order: last inserted first
+    int start = mem->repl_index[hash];
+    for (int k = 0; k < mem->ways; k++) {
+        int w = (start - 1 - k);
+        if (w < 0) w += mem->ways * ((-w) / mem->ways + 1);
+        w %= mem->ways;
         uint16_t wrapped_pos = mem->buckets[hash * mem->ways + w];
         if (wrapped_pos == 0xFFFF) continue; // empty slot
 
@@ -500,28 +516,47 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
             match_len++;
         }
 
-        // Simple quality heuristic (closer + longer preferred)
-        int quality = 0;
-        if (match_len >= 8) quality += 16;
-        if (match_len >= 16) quality += 8;
-        if (offset <= 256) quality += 8;
-        if (offset <= 64) quality += 4;
+        // Dynamic minimal length requirement for far matches
+        int min_len_req = MIN_MATCH_LENGTH;
+        if (offset > 1024) min_len_req++;
+        if (offset > 4096) min_len_req += 2;
 
-        if (match_len >= MIN_MATCH_LENGTH) {
+        if (match_len >= min_len_req) {
+            // Estimate bit cost of encoding this match
+            // KIND_REF (1) + REPEATED bit if needed (1) + offset (if changed) + length
+            int repeated_needed = mem->state.prev_was_ref ? 0 : 1;
+            int offset_changed = (offset != mem->state.last_offset);
+
+            // Add a small base penalty for large offsets even when repeated,
+            // to avoid sticking to very large offsets producing many short matches.
+            int base_offset_penalty = estimate_number_cost_int(offset + 2) >> 2; // ~25%
+
+            int cost = 1; // KIND_REF
+            cost += repeated_needed;
+            cost += base_offset_penalty;
+            if (offset_changed) cost += estimate_number_cost_int(offset + 2);
+            cost += estimate_number_cost_int(match_len);
+
             int is_better = 0;
-            if (match_len > *best_length) {
+            if (*best_length == 0) {
                 is_better = 1;
-            } else if (match_len == *best_length) {
-                if (quality > best_quality) {
+            } else {
+                // Prefer lower cost; break ties with longer length, then closer offset
+                // Represent current best cost implicitly using best_quality as cost storage
+                if (best_quality == 0 || cost < best_quality) {
                     is_better = 1;
-                } else if (quality == best_quality && offset < *best_offset) {
-                    is_better = 1;
+                } else if (cost == best_quality) {
+                    if (match_len > *best_length) {
+                        is_better = 1;
+                    } else if (match_len == *best_length && offset < *best_offset) {
+                        is_better = 1;
+                    }
                 }
             }
             if (is_better) {
                 *best_length = match_len;
                 *best_offset = offset;
-                best_quality = quality;
+                best_quality = cost; // store best cost here
             }
         }
     }
@@ -538,7 +573,7 @@ static int compress_data(const unsigned char *input, int input_size,
     // Derive match-finder sizes from provided work memory (single malloc arena)
     // We use a set-associative table with "ways" entries per bucket and
     // a round-robin replacement index per bucket (1 byte).
-    int ways = 2; // minimal overhead; can tune to 4 if memory allows
+    int ways = (work_memory_size >= 4096) ? 4 : 2; // increase associativity when memory allows
     if (work_memory_size <= sizeof(shr_work_buffer_t)) {
         return -4; // Not enough memory even for control structure
     }
@@ -553,14 +588,14 @@ static int compress_data(const unsigned char *input, int input_size,
         return -4; // Not enough memory for even a single bucket
     }
 
-    // Choose hash_size as the largest odd number <= max_buckets (avoid even divisors)
-    int hash_size = (int)max_buckets;
-    if ((hash_size & 1) == 0 && hash_size > 1) hash_size--;
+    // Choose hash_size as largest power-of-two <= max_buckets for fast masking
+    int hash_size = 1;
+    while (((size_t)hash_size << 1) <= max_buckets) hash_size <<= 1;
 
     // Determine window size based on total storable entries (hash_size * ways)
-    // Pick a power-of-two window_size <= min(65536, 4 * hash_size * ways) with a minimum of 256
+    // Pick a power-of-two window_size <= min(65536, 2 * hash_size * ways) with a minimum of 256
     size_t target_entries = (size_t)hash_size * (size_t)ways;
-    size_t target_window = target_entries * 4; // keep some slack beyond stored entries
+    size_t target_window = target_entries * 2; // tighter coupling with actual indexable entries
     if (target_window < 256) target_window = 256;
     if (target_window > 65536) target_window = 65536;
     // Round down to power of two
@@ -579,8 +614,9 @@ static int compress_data(const unsigned char *input, int input_size,
     if (buckets_bytes + repl_bytes > available) {
         size_t usable_buckets = available / cost_per_bucket;
         if (usable_buckets == 0) return -4;
-        hash_size = (int)usable_buckets;
-        if ((hash_size & 1) == 0 && hash_size > 1) hash_size--;
+        // round down to power of two
+        hash_size = 1;
+        while (((size_t)hash_size << 1) <= usable_buckets) hash_size <<= 1;
         buckets_bytes = (size_t)hash_size * (size_t)ways * sizeof(uint16_t);
         repl_bytes = (size_t)hash_size * sizeof(uint8_t);
     }
@@ -601,6 +637,7 @@ static int compress_data(const unsigned char *input, int input_size,
     // Initialize match finder configuration
     mem->hash_size = hash_size;
     mem->ways = ways;
+    mem->hash_mask = hash_size - 1;
     mem->window_bits = window_bits;
     mem->window_size = (int)window_size;
     mem->window_mask = window_mask;

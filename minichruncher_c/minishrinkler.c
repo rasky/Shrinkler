@@ -21,9 +21,12 @@
  * @brief Print usage information
  */
 static void print_usage(const char *program_name) {
-    printf("Usage: %s <input_file> <output_file>\n", program_name);
+    printf("Usage: %s [--window <size_kb>] <input_file> <output_file>\n", program_name);
     printf("MiniShrinkler - Embedded-friendly version of the Shrinkler compressor\n");
     printf("Outputs raw compressed data without header (compatible with -d option)\n");
+    printf("\n");
+    printf("Options:\n");
+    printf("  --window <size_kb>  Set hash table size in kilobytes (default: 4)\n");
     printf("\n");
 }
 
@@ -103,13 +106,41 @@ static bool write_file(const char *filename, const uint8_t *data, size_t size) {
  * @brief Main function
  */
 int main(int argc, char *argv[]) {
-    if (argc != 3) {
+    const char *input_file = NULL;
+    const char *output_file = NULL;
+    size_t window_size_kb = 4;  // Default: 4 KB
+    
+    // Parse command line arguments
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--window") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: --window requires a size value\n");
+                print_usage(argv[0]);
+                return 1;
+            }
+            char *endptr;
+            long size = strtol(argv[i + 1], &endptr, 10);
+            if (*endptr != '\0' || size <= 0 || size > 1024) {
+                fprintf(stderr, "Error: Invalid window size '%s'. Must be 1-1024 KB\n", argv[i + 1]);
+                return 1;
+            }
+            window_size_kb = (size_t)size;
+            i++;  // Skip the size value
+        } else if (input_file == NULL) {
+            input_file = argv[i];
+        } else if (output_file == NULL) {
+            output_file = argv[i];
+        } else {
+            fprintf(stderr, "Error: Too many arguments\n");
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+    
+    if (input_file == NULL || output_file == NULL) {
         print_usage(argv[0]);
         return 1;
     }
-    
-    const char *input_file = argv[1];
-    const char *output_file = argv[2];
     
     // Read input file
     size_t input_size;
@@ -129,8 +160,13 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
+    // Calculate work memory size in bytes
+    size_t work_memory_size = window_size_kb * 1024;
+    
+    printf("Using hash table size: %zu KB (%zu bytes)\n", window_size_kb, work_memory_size);
+    
     // Compress data
-    int compressed_size = minishrinkler_compress(input_data, input_size, output_data, output_capacity);
+    int compressed_size = minishrinkler_compress(input_data, input_size, output_data, output_capacity, work_memory_size);
     
     if (compressed_size < 0) {
         switch (compressed_size) {

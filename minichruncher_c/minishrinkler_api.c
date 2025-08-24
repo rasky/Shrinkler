@@ -98,10 +98,11 @@ typedef struct {
 // Memory layout structure for embedded allocation
 typedef struct {
     int size_table[128];
-    shr_hash_entry_t hash_table[HASH_SIZE];
     shr_rangecoder_t coder;
     shr_lzstate_t state;
     int size_table_init;
+    int hash_table_size;  // Number of hash table entries
+    shr_hash_entry_t hash_table[];  // Variable size array at the end
 } shr_work_buffer_t;
 
 // Utility functions
@@ -118,21 +119,21 @@ static void init_size_table(shr_work_buffer_t *mem) {
 }
 
 // Improved hash function for 3-byte sequences
-static unsigned int hash3(const unsigned char *data) {
+static unsigned int hash3(const unsigned char *data, int hash_size) {
     // Better distribution than simple bit shifting
-    return ((data[0] * 31 + data[1]) * 31 + data[2]) % HASH_SIZE;
+    return ((data[0] * 31 + data[1]) * 31 + data[2]) % hash_size;
 }
 
 // Initialize hash table
 static void init_hash_table(shr_work_buffer_t *mem) {
-    memset(mem->hash_table, 0, sizeof(mem->hash_table));
+    memset(mem->hash_table, 0, mem->hash_table_size * sizeof(shr_hash_entry_t));
 }
 
 // Update hash table with new position and cache match information
 static void update_hash(shr_work_buffer_t *mem, const unsigned char *data, int pos, int data_size) {
     if (pos + 2 >= data_size) return;
     
-    unsigned int hash = hash3(&data[pos]);
+    unsigned int hash = hash3(&data[pos], mem->hash_table_size);
     
     // Calculate match quality based on data characteristics (6-bit: 0-63)
     uint8_t quality = 0;
@@ -481,7 +482,7 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
     int max_offset = min(pos, MAX_OFFSET);
     
     // Use hash table to find potential matches
-    unsigned int hash = hash3(&data[pos]);
+    unsigned int hash = hash3(&data[pos], mem->hash_table_size);
     int candidate_pos = mem->hash_table[hash].pos;
     int matches_checked = 0;
     
@@ -622,18 +623,24 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
 
 // Main compression function
 static int compress_data(const unsigned char *input, int input_size, 
-                        unsigned char *output, int output_capacity) {
+                        unsigned char *output, int output_capacity,
+                        size_t work_memory_size) {
     int pos = 0;
     
-    // Allocate embedded memory
-    shr_work_buffer_t *mem = malloc(sizeof(shr_work_buffer_t));
+    // Calculate hash table size from work memory size
+    size_t hash_table_entries = work_memory_size / sizeof(shr_hash_entry_t);
+    size_t total_size = sizeof(shr_work_buffer_t) + hash_table_entries * sizeof(shr_hash_entry_t);
+    
+    // Allocate embedded memory with variable hash table size
+    shr_work_buffer_t *mem = malloc(total_size);
     if (!mem) {
         fprintf(stderr, "Error: Memory allocation failed\n");
         return -4; // Memory allocation failed
     }
     
     // Initialize memory to zero
-    memset(mem, 0, sizeof(shr_work_buffer_t));
+    memset(mem, 0, total_size);
+    mem->hash_table_size = (int)hash_table_entries;
     
     // Initialize
     init_size_table(mem);
@@ -733,7 +740,8 @@ int minishrinkler_compress(
     const uint8_t *input_data,
     size_t input_size,
     uint8_t *output_buffer,
-    size_t output_capacity
+    size_t output_capacity,
+    size_t work_memory_size
 ) {
     // Validate input parameters
     if (!input_data || !output_buffer || input_size == 0 || output_capacity == 0) {
@@ -755,7 +763,8 @@ int minishrinkler_compress(
     
     // Call the original compression function
     int result = compress_data((const unsigned char*)input_data, (int)input_size, 
-                              (unsigned char*)output_buffer, (int)output_capacity);
+                              (unsigned char*)output_buffer, (int)output_capacity,
+                              work_memory_size);
     
     return result;
 }

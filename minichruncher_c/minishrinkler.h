@@ -22,7 +22,8 @@
  * 
  * int compressed_size = minishrinkler_compress(
  *     input_buffer, 1024,      // input data and size
- *     output_buffer, 2048      // output buffer and capacity
+ *     output_buffer, 2048,     // output buffer and capacity
+ *     4608                     // work memory size for hash table
  * );
  * 
  * if (compressed_size > 0) {
@@ -54,6 +55,7 @@ extern "C" {
  * @param input_size Size of the input data in bytes
  * @param output_buffer Pointer to the output buffer for compressed data
  * @param output_capacity Maximum capacity of the output buffer in bytes
+ * @param work_memory_size Size of work memory to allocate for hash table in bytes
  * 
  * @return On success: number of bytes written to output_buffer (compressed size)
  * @return On failure: negative value indicating error
@@ -74,7 +76,8 @@ int minishrinkler_compress(
     const uint8_t *input_data,
     size_t input_size,
     uint8_t *output_buffer,
-    size_t output_capacity
+    size_t output_capacity,
+    size_t work_memory_size
 );
 
 /**

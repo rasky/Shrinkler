@@ -95,12 +95,14 @@ typedef struct {
 // Embedded memory optimization: no static allocations
 // All memory will be allocated dynamically in a single buffer
 
+const uint8_t size_table[128] = {
+    0x40,0x3f,0x3f,0x3e,0x3d,0x3c,0x3c,0x3b,0x3a,0x3a,0x39,0x38,0x38,0x37,0x36,0x36,0x35,0x34,0x34,0x33,0x33,0x32,0x31,0x31,0x30,0x30,0x2f,0x2e,0x2e,0x2d,0x2d,0x2c,0x2b,0x2b,0x2a,0x2a,0x29,0x29,0x28,0x27,0x27,0x26,0x26,0x25,0x25,0x24,0x24,0x23,0x23,0x22,0x22,0x21,0x21,0x20,0x20,0x1f,0x1e,0x1e,0x1d,0x1d,0x1d,0x1c,0x1c,0x1b,0x1b,0x1a,0x1a,0x19,0x19,0x18,0x18,0x17,0x17,0x16,0x16,0x15,0x15,0x15,0x14,0x14,0x13,0x13,0x12,0x12,0x11,0x11,0x11,0x10,0x10,0xf,0xf,0xe,0xe,0xe,0xd,0xd,0xc,0xc,0xc,0xb,0xb,0xa,0xa,0x9,0x9,0x9,0x8,0x8,0x8,0x7,0x7,0x6,0x6,0x6,0x5,0x5,0x4,0x4,0x4,0x3,0x3,0x3,0x2,0x2,0x1,0x1,0x1,0x0
+};
+
 // Memory layout structure for embedded allocation
 typedef struct {
-    int size_table[128];
     shr_rangecoder_t coder;
     shr_lzstate_t state;
-    int size_table_init;
     int hash_table_size;  // Number of hash table entries
     shr_hash_entry_t hash_table[];  // Variable size array at the end
 } shr_work_buffer_t;
@@ -108,25 +110,19 @@ typedef struct {
 // Utility functions
 static int min(int a, int b) { return a < b ? a : b; }
 
+#if 0
 // Initialize size table
 static void init_size_table(shr_work_buffer_t *mem) {
-    if (mem->size_table_init) return;
-    
     for (int i = 0; i < 128; i++) {
         mem->size_table[i] = (int) floor(0.5 + (8.0 - log((double) (128 + i)) / log(2.0)) * (1 << 6));
     }
-    mem->size_table_init = 1;
 }
+#endif
 
 // Improved hash function for 3-byte sequences
 static unsigned int hash3(const unsigned char *data, int hash_size) {
     // Better distribution than simple bit shifting
     return ((data[0] * 31 + data[1]) * 31 + data[2]) % hash_size;
-}
-
-// Initialize hash table
-static void init_hash_table(shr_work_buffer_t *mem) {
-    memset(mem->hash_table, 0, mem->hash_table_size * sizeof(shr_hash_entry_t));
 }
 
 // Update hash table with new position and cache match information
@@ -174,7 +170,7 @@ static void range_coder_init(shr_rangecoder_t *coder, uint8_t *output, int capac
     }
     
     // Initialize output buffer
-    memset(output, 0, capacity);
+    //memset(output, 0, capacity);
     
     // Ensure first byte is initialized
     output[0] = 0;
@@ -222,7 +218,7 @@ static void add_bit(shr_rangecoder_t *coder) {
 }
 
 // Exact copy of original rangecoder_code function
-static int range_coder_code(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int context_index, int bit) {
+static int range_coder_code(shr_rangecoder_t *coder, int context_index, int bit) {
     // Handle special context indices
     if (context_index < 0) {
         // Special contexts like CONTEXT_REPEATED (-1) are handled differently
@@ -234,9 +230,9 @@ static int range_coder_code(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int
     int size_before;
     if (coder->dest_bit < 0) {
         // Initial state: dest_bit is -1, so size is just the sizetable entry
-        size_before = mem->size_table[(coder->intervalsize - 0x8000) >> 8];
+        size_before = size_table[(coder->intervalsize - 0x8000) >> 8];
     } else {
-        size_before = (coder->dest_bit << 6) + mem->size_table[(coder->intervalsize - 0x8000) >> 8];  // BIT_PRECISION = 6
+        size_before = (coder->dest_bit << 6) + size_table[(coder->intervalsize - 0x8000) >> 8];  // BIT_PRECISION = 6
     }
     
     // Trace the input state
@@ -285,9 +281,9 @@ static int range_coder_code(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int
     int size_after;
     if (coder->dest_bit < 0) {
         // Initial state: dest_bit is -1, so size is just the sizetable entry
-        size_after = mem->size_table[(coder->intervalsize - 0x8000) >> 8];
+        size_after = size_table[(coder->intervalsize - 0x8000) >> 8];
     } else {
-        size_after = (coder->dest_bit << 6) + mem->size_table[(coder->intervalsize - 0x8000) >> 8];  // BIT_PRECISION = 6
+        size_after = (coder->dest_bit << 6) + size_table[(coder->intervalsize - 0x8000) >> 8];  // BIT_PRECISION = 6
     }
     int size_diff = size_after - size_before;
     
@@ -354,7 +350,7 @@ static void lz_state_init(shr_lzstate_t *state) {
     state->last_offset = 0;
 }
 
-static int encode_literal(shr_rangecoder_t *coder, shr_work_buffer_t *mem, unsigned char value, shr_lzstate_t *state) {
+static int encode_literal(shr_rangecoder_t *coder, unsigned char value, shr_lzstate_t *state) {
     int parity = state->parity & 1;
     int size = 0;
     
@@ -363,7 +359,7 @@ static int encode_literal(shr_rangecoder_t *coder, shr_work_buffer_t *mem, unsig
            value, (value >= 32 && value <= 126) ? value : '.', parity, state->after_first);
     
     if (state->after_first) {
-        range_coder_code(coder, mem, 1 + CONTEXT_KIND + (parity << 8), 0); // KIND_LIT
+        range_coder_code(coder, 1 + CONTEXT_KIND + (parity << 8), 0); // KIND_LIT
         size++;
     }
     
@@ -371,7 +367,7 @@ static int encode_literal(shr_rangecoder_t *coder, shr_work_buffer_t *mem, unsig
     for (int i = 7; i >= 0; i--) {
         int bit = ((value >> i) & 1);
         int actual_context = 1 + ((parity << 8) | context);  // Correct context calculation
-        range_coder_code(coder, mem, actual_context, bit);
+        range_coder_code(coder, actual_context, bit);
         size++;
         context = (context << 1) | bit;
     }
@@ -385,7 +381,7 @@ static int encode_literal(shr_rangecoder_t *coder, shr_work_buffer_t *mem, unsig
 }
 
 // Exact copy of coder_encode_number from cruncher_c/Coder.c (adapted for RangeCoder)
-static int encode_number(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int context_group, int number) {
+static int encode_number(shr_rangecoder_t *coder, int context_group, int number) {
     int base_context = 1 + (context_group << 8);
     
     // Trace number encoding start
@@ -407,21 +403,21 @@ static int encode_number(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int co
         context = base_context + (i * 2 + 2);
         tracef("  CONTINUE_BIT: i=%d context=%d bit=1 (4<<i=%d <= %d)\n", 
                i, context, (4 << i), number);
-        size += range_coder_code(coder, mem, context, 1);
+        size += range_coder_code(coder, context, 1);
     }
     
     // Stop bit (exact copy)
     context = base_context + (i * 2 + 2);
     tracef("  STOP_BIT: i=%d context=%d bit=0 (4<<i=%d > %d)\n", 
            i, context, (4 << i), number);
-    size += range_coder_code(coder, mem, context, 0);
+    size += range_coder_code(coder, context, 0);
     
     // Second loop: actual bits (exact copy)
     for (; i >= 0 ; i--) {
         int bit = ((number >> i) & 1);
         context = base_context + (i * 2 + 1);
         tracef("  NUMBER_BIT: i=%d context=%d bit=%d (number>>%d&1)\n", i, context, bit, i);
-        size += range_coder_code(coder, mem, context, bit);
+        size += range_coder_code(coder, context, bit);
     }
     
     tracef("ENCODE_NUMBER: COMPLETE size=%d\n", size);
@@ -429,7 +425,7 @@ static int encode_number(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int co
     return size;
 }
 
-static int encode_reference(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int offset, int length, shr_lzstate_t *state) {
+static int encode_reference(shr_rangecoder_t *coder, int offset, int length, shr_lzstate_t *state) {
     int parity = state->parity & 1;
     int size = 0;
     
@@ -439,26 +435,26 @@ static int encode_reference(shr_rangecoder_t *coder, shr_work_buffer_t *mem, int
            offset, length, parity, state->prev_was_ref, state->last_offset);
     tracef("KIND_REF: context=%d bit=1\n", 1 + CONTEXT_KIND + (parity << 8));
     
-    range_coder_code(coder, mem, 1 + CONTEXT_KIND + (parity << 8), 1); // KIND_REF
+    range_coder_code(coder, 1 + CONTEXT_KIND + (parity << 8), 1); // KIND_REF
     size++;
     
     if (!state->prev_was_ref) {
         int repeated = offset == state->last_offset;
         tracef("REPEATED: context=%d bit=%d (offset %s last_offset)\n", 
                1 + CONTEXT_REPEATED, repeated, repeated ? "==" : "!=");
-        range_coder_code(coder, mem, 1 + CONTEXT_REPEATED, repeated);
+        range_coder_code(coder, 1 + CONTEXT_REPEATED, repeated);
         size++;
     }
     
     if (offset != state->last_offset) {
         tracef("ENCODE_OFFSET: offset=%d (encoded as %d)\n", offset, offset + 2);
-        size += encode_number(coder, mem, CONTEXT_GROUP_OFFSET, offset + 2);
+        size += encode_number(coder, CONTEXT_GROUP_OFFSET, offset + 2);
     } else {
         tracef("SKIP_OFFSET: offset=%d same as last_offset\n", offset);
     }
     
     tracef("ENCODE_LENGTH: length=%d\n", length);
-    size += encode_number(coder, mem, CONTEXT_GROUP_LENGTH, length);
+    size += encode_number(coder, CONTEXT_GROUP_LENGTH, length);
     
     // Update state
     state->after_first = 1;
@@ -652,8 +648,6 @@ static int compress_data(const unsigned char *input, int input_size,
     mem->hash_table_size = (int)hash_table_entries;
     
     // Initialize
-    init_size_table(mem);
-    init_hash_table(mem);
     range_coder_init(&mem->coder, output, output_capacity);
     lz_state_init(&mem->state);
     
@@ -691,7 +685,7 @@ static int compress_data(const unsigned char *input, int input_size,
                     if (next_length > best_length + 1 || 
                         (next_length == best_length + 1 && next_cost <= current_cost)) {
                         tracef("POS %d: LAZY LITERAL 0x%02x (waiting for better match)\n", pos, input[pos]);
-                        encode_literal(&mem->coder, mem, input[pos], &mem->state);
+                        encode_literal(&mem->coder, input[pos], &mem->state);
                         pos++;
                         continue;
                     }
@@ -700,13 +694,13 @@ static int compress_data(const unsigned char *input, int input_size,
             
             // Encode reference
             tracef("POS %d: MATCH offset=%d length=%d\n", pos, best_offset, best_length);
-            encode_reference(&mem->coder, mem, best_offset, best_length, &mem->state);
+            encode_reference(&mem->coder, best_offset, best_length, &mem->state);
             pos += best_length;
         } else {
             // Encode literal
             tracef("POS %d: LITERAL 0x%02x (%c)\n", pos, input[pos], 
                    (input[pos] >= 32 && input[pos] <= 126) ? input[pos] : '.');
-            encode_literal(&mem->coder, mem, input[pos], &mem->state);
+            encode_literal(&mem->coder, input[pos], &mem->state);
             pos++;
         }
     }
@@ -714,9 +708,9 @@ static int compress_data(const unsigned char *input, int input_size,
     // Encode end marker (offset 0)
     tracef("END: ENCODE_END_MARKER\n");
     int parity = mem->state.parity & 1;
-    range_coder_code(&mem->coder, mem, 1 + CONTEXT_KIND + (parity << 8), 1); // KIND_REF
-    range_coder_code(&mem->coder, mem, 1 + CONTEXT_REPEATED, 0); // Not repeated
-    encode_number(&mem->coder, mem, CONTEXT_GROUP_OFFSET, 2); // Offset 0 + 2 = 2 = end
+    range_coder_code(&mem->coder, 1 + CONTEXT_KIND + (parity << 8), 1); // KIND_REF
+    range_coder_code(&mem->coder, 1 + CONTEXT_REPEATED, 0); // Not repeated
+    encode_number(&mem->coder, CONTEXT_GROUP_OFFSET, 2); // Offset 0 + 2 = 2 = end
 
     // Finalize
     range_coder_finish(&mem->coder);

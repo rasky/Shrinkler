@@ -1,13 +1,19 @@
 /**
- * @file minishrinkler_api.c
- * @brief Minishrinkler compression API implementation
+ * @file minishrinkler.c
  * @author Giovanni Bajo <giovannibajo@gmail.com>
+ * @brief Minishrinkler compression API implementation
  * 
  * This file contains the core compression logic for Minishrinkler,
  * providing a buffer-to-buffer compression API without any file I/O.
- * The implementation is an exact copy of the working logic from minishrinkler.c
+ *
+ * This implements the Shrinkler bitstream with a very simplified compression
+ * algorithm. Since the LZ coder is very basic, the compression ratio is good
+ * only on small files up to a few KiB (where the range coder itself beats
+ * standard LZ+Huffman constructs). Once the file size grows beyond that,
+ * the lack of advanced LZ techniques makes the compression ratio degrade
+ * quickly, and for large files the compression ratio is much worse than
+ * standard algorithms like DEFLATE.
  */
-
 #include "minishrinkler.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +23,8 @@
 #include <stdarg.h>
 #endif
 #include <stdbool.h>
+
+///@cond
 
 // Compile-time trace control
 #define TRACE_SHRINKLER 0
@@ -59,54 +67,60 @@ static void tracef(const char *fmt, ...) {
 #define CONTEXT_GROUP_OFFSET 2
 #define CONTEXT_GROUP_LENGTH 3
 
+///@endcond
+
 // Moving window: computed dynamically from work memory; keep max at 64K
 // (we will compute window_size and mask at runtime based on available memory)
 
-// Data structures - Embedded optimized
+/** @brief Range coder context */
 typedef struct {
-    uint16_t contexts[NUM_CONTEXTS];
-    uint8_t *output;
-    uint32_t output_size;    
-    uint32_t output_capacity;
-    int32_t dest_bit;        
-    uint32_t intervalsize;
-    uint32_t intervalmin;
+    uint16_t contexts[NUM_CONTEXTS];            ///< Context modeling
+    uint8_t *output;                            ///< Output buffer
+    uint32_t output_size;                       ///< Output buffer size
+    uint32_t output_capacity;                   ///< Output buffer capacity
+    int32_t dest_bit;                           ///< Destination bit
+    uint32_t intervalsize;                      ///< Interval size
+    uint32_t intervalmin;                       ///< Interval minimum
 } shr_rangecoder_t;
 
+/** @brief LZ coder state */
 typedef struct {
-    bool after_first;     
-    bool prev_was_ref;    
-    int parity;                           
-    uint16_t last_offset;
+    bool after_first;                          ///< First symbol was done?
+    bool prev_was_ref;                         ///< Previous symbols was a match?
+    int parity;                                ///< Parity bit
+    uint16_t last_offset;                      ///< Last encoded offset (for repetitions)
 } shr_lzstate_t;
 
-// Note: The match finder uses a compact set-associative hash table carved from
-// the provided work memory. Each bucket keeps a small number (ways) of wrapped
-// 16-bit positions. No dynamic allocations beyond the single arena.
-
-// Embedded memory optimization: no static allocations
-// All memory will be allocated dynamically in a single buffer
-
-const uint8_t size_table[128] = {
+/** @brief Size table for encoding numbers */
+static const uint8_t size_table[128] = {
     0x40,0x3f,0x3f,0x3e,0x3d,0x3c,0x3c,0x3b,0x3a,0x3a,0x39,0x38,0x38,0x37,0x36,0x36,0x35,0x34,0x34,0x33,0x33,0x32,0x31,0x31,0x30,0x30,0x2f,0x2e,0x2e,0x2d,0x2d,0x2c,0x2b,0x2b,0x2a,0x2a,0x29,0x29,0x28,0x27,0x27,0x26,0x26,0x25,0x25,0x24,0x24,0x23,0x23,0x22,0x22,0x21,0x21,0x20,0x20,0x1f,0x1e,0x1e,0x1d,0x1d,0x1d,0x1c,0x1c,0x1b,0x1b,0x1a,0x1a,0x19,0x19,0x18,0x18,0x17,0x17,0x16,0x16,0x15,0x15,0x15,0x14,0x14,0x13,0x13,0x12,0x12,0x11,0x11,0x11,0x10,0x10,0xf,0xf,0xe,0xe,0xe,0xd,0xd,0xc,0xc,0xc,0xb,0xb,0xa,0xa,0x9,0x9,0x9,0x8,0x8,0x8,0x7,0x7,0x6,0x6,0x6,0x5,0x5,0x4,0x4,0x4,0x3,0x3,0x3,0x2,0x2,0x1,0x1,0x1,0x0
 };
 
-// Memory layout structure for embedded allocation
+/** 
+ * @brief Layout structure for working memory bufferr
+ *
+ * All the work memory used by the compressor is described by this structure.
+ * No dynamic allocations beyond the single arena.
+ *
+ * The match finder uses a compact set-associative hash table carved from
+ * the provided work memory. Each bucket keeps a small number (ways) of wrapped
+ * 16-bit positions.
+ */
 typedef struct {
-    shr_rangecoder_t coder;
-    shr_lzstate_t state;
+    shr_rangecoder_t coder;        ///< Range coder context
+    shr_lzstate_t state;           ///< LZ coder state
 
-    // Match finder configuration derived from work memory
-    int hash_size;          // number of buckets (power of two)
-    int hash_mask;          // hash_size - 1
-    int ways;               // associativity (entries per bucket)
-    int window_bits;        // such that window_size == (1 << window_bits)
-    int window_size;        // sliding window size (<= 65536)
-    int window_mask;        // window_size - 1
+    // Hash table configuration and sliding window
+    int hash_size;                ///< Number of buckets (power of two)
+    int hash_mask;                ///< hash_size - 1
+    int ways;                     ///< Associativity (entries per bucket)
+    int window_bits;              ///< such that window_size == (1 << window_bits)
+    int window_size;              ///< sliding window size (<= 65536)
+    int window_mask;              ///< window_size - 1
 
     // Pointers into the single malloc arena (immediately after this struct)
-    uint16_t *buckets;      // size = hash_size * ways; each is wrapped pos (0..mask) or 0xFFFF if empty
-    uint8_t  *repl_index;   // size = hash_size; round-robin replacement index per bucket
+    uint16_t *buckets;            ///< size = hash_size * ways; each is wrapped pos (0..mask) or 0xFFFF if empty
+    uint8_t  *repl_index;         ///< size = hash_size; round-robin replacement index per bucket
 } shr_work_buffer_t;
 
 // Utility functions
@@ -192,16 +206,12 @@ static void add_bit(shr_rangecoder_t *coder) {
         bytepos = pos >> 3;
         bitmask = 0x80 >> (pos & 7);
         
-        if (bytepos >= (int)coder->output_capacity) {
-            fprintf(stderr, "Output buffer overflow: bytepos=%d, output_capacity=%d\n", bytepos, coder->output_capacity);
-            exit(1);
-        }
-        
         // Initialize byte to 0 if not already done
         while (bytepos >= (int)coder->output_size) {
             coder->output[coder->output_size++] = 0;
         }
         
+        assert(bytepos < (int)coder->output_capacity);
         coder->output[bytepos] ^= bitmask;
         
         // tracef("    ADD_BIT: pos=%d bytepos=%d bitmask=0x%02x old_byte=0x%02x new_byte=0x%02x\n", 

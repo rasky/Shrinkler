@@ -1,5 +1,5 @@
 /**
- * @file minishrinkler.c
+ * @file minishrinkler_cli.c
  * @brief Minishrinkler command-line tool
  * @author Giovanni Bajo <giovannibajo@gmail.com>
  * 

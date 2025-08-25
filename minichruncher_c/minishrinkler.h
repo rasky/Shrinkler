@@ -1,17 +1,17 @@
 /**
  * @file minishrinkler.h
- * @brief Minishrinkler compression API - Simplified Shrinkler compressor
  * @author Giovanni Bajo <giovannibajo@gmail.com>
+ * @brief Minishrinkler compression API - Simplified Shrinkler compressor
  * 
  * This header provides a simple buffer-to-buffer compression API for the
  * Minishrinkler compressor, a simplified version of the Shrinkler algorithm.
  * 
  * Features:
- * - No dynamic memory allocations (uses static buffers)
- * - Compatible with official Shrinkler decompressor
- * - LZ77 compression with hash-based match finding
- * - Range coder with context modeling
- * - Generates raw compressed data (no header)
+ * * A single dynamic memory allocations for all the work memory
+ * * Compatible with official Shrinkler decompressor (same bitstream)
+ * * LZ77 compression with hash-based match finding
+ * * Range coder with context modeling
+ * * Generates raw compressed data (no header)
  * 
  * Usage:
  * @code

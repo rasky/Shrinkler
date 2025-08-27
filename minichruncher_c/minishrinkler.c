@@ -81,6 +81,7 @@ typedef struct {
     int32_t dest_bit;                           ///< Destination bit
     uint32_t intervalsize;                      ///< Interval size
     uint32_t intervalmin;                       ///< Interval minimum
+    int lit_avg_events;                         ///< EWMA of literal event cost (init ~9)
 } shr_rangecoder_t;
 
 /** @brief LZ coder state */
@@ -121,6 +122,9 @@ typedef struct {
     // Pointers into the single malloc arena (immediately after this struct)
     uint16_t *buckets;            ///< size = hash_size * ways; each is wrapped pos (0..mask) or 0xFFFF if empty
     uint8_t  *repl_index;         ///< size = hash_size; round-robin replacement index per bucket
+
+    // Rolling estimate of literal event cost (EWMA of encode_literal sizes)
+    int lit_avg_events;           ///< average range-coder events per literal (init ~9)
 } shr_work_buffer_t;
 
 // Utility functions
@@ -186,6 +190,7 @@ static void range_coder_init(shr_rangecoder_t *coder, uint8_t *output, int capac
     
     // Ensure first byte is initialized
     output[0] = 0;
+    coder->lit_avg_events = 9;
 }
 
 // Forward declaration for tracing (only when tracing is enabled)
@@ -378,6 +383,9 @@ static int encode_literal(shr_rangecoder_t *coder, unsigned char value, shr_lzst
     state->after_first = 1;
     state->prev_was_ref = 0;
     state->parity = state->parity + 1;
+    // Update EWMA of literal events (alpha=1/8)
+    // Note: size is in the same "event" units used by the cost model
+    coder->lit_avg_events = (coder->lit_avg_events * 7 + size) >> 3;
     
     return size;
 }
@@ -542,10 +550,9 @@ static int find_match(shr_work_buffer_t *mem, const unsigned char *data, int dat
             if (offset_changed) ref_cost += estimate_number_cost_int(offset + 2);
             ref_cost += estimate_number_cost_int(match_len);
 
-            // Credit saved literal cost roughly linear in length.
-            // Use a conservative constant to avoid over-biasing long far matches.
-            const int LIT_COST_EST = 2; // tuneable: "events" per literal byte
-            int saved = match_len * LIT_COST_EST;
+            // Credit saved literal cost using EWMA of literal size
+            int lit_cost = mem->coder.lit_avg_events ? mem->coder.lit_avg_events : 9;
+            int saved = match_len * lit_cost;
             int net_cost = ref_cost - saved;
 
             int is_better = 0;
